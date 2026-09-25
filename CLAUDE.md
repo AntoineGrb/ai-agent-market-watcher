@@ -4,18 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## État du dépôt
 
-Étape 0 (spike sources) terminée : voir `docs/sources.md` (endpoints validés, pièges, points ouverts) et les réponses réelles enregistrées dans `tests/data/sources/`. Le package `watcher/` est encore vide ; l'arborescence cible est décrite dans `.claude/docs/cadrage.md` §3.2.
+Étape 0 (spike sources) terminée : voir `docs/sources.md` (endpoints validés, pièges) et les réponses réelles enregistrées dans `tests/data/sources/`.
+
+Étape 1 (socle) en place : `settings.py`, `config.py` (schéma §4.2 + `Defaults`, `extra="forbid"`, chargement isolé par agent), `models.py`, `store.py` (schéma §10, transaction par agent), `monitoring.py`, `notify/` (mailer, gabarits mail de test et erreur de config), `sources/base.py` (Protocol + registre vide), `run.py` (orchestration). Les étapes 3 à 11 du pipeline sont des emplacements commentés dans `Runner._process_agent` / `_run_agents`. Arborescence cible : `docs/cadrage.md` §3.2.
 
 Mise en place locale (Windows) : `python -m venv .venv` puis `.venv/Scripts/python -m pip install -r requirements-dev.txt`. `pytest` exclut le marqueur `eval` par défaut (`pyproject.toml`). Sur ce poste, Avast intercepte le TLS : les appels réseau Python échouent sans bundle CA adapté (voir `docs/sources.md` §8), ne rien contourner dans le code.
 
 ## Documents de référence
 
-- **`.claude/docs/cadrage.md`** : source de vérité (architecture, schémas Pydantic, moteur de règles, SQLite, plan d'étapes). Le lire en entier avant d'écrire du code.
+- **`docs/cadrage.md`** : source de vérité (architecture, schémas Pydantic, moteur de règles, SQLite, plan d'étapes). Le lire en entier avant d'écrire du code.
   - Les décisions de la §2 sont **actées** : ne pas les rediscuter, signaler seulement une impossibilité technique.
   - Les éléments marqués 🔲 ne doivent **pas** être inventés : valeur `null` ou source en `enabled: false`.
   - Implémenter étape par étape (§13, étapes 0 à 6) ; ne pas passer à l'étape suivante sans tests verts.
 - **`docs/sources.md`** : livrable de l'étape 0, référence pour implémenter les fetchers et le provider de cours (ex. `when:Nd` obligatoire sur Google News, AMF via l'API info-financiere.gouv.fr filtrée par ISIN, barre du jour à écarter dans les cours).
-- **`.claude/docs/specs.md`** (v1.2) : ne sert plus que de source du **contenu rédactionnel** des `agents/<id>/prompt.md` (thèse, contexte, nuances). Ses tableaux de règles, sa section 0 et ses références à `watch_rules.yaml` / `watch_models.py` sont obsolètes : les règles vivent dans `agents/<id>/config.yaml`.
+- **`docs/specs.md`** (v1.2) : ne sert plus que de source du **contenu rédactionnel** des `agents/<id>/prompt.md` (thèse, contexte, nuances). Ses tableaux de règles, sa section 0 et ses références à `watch_rules.yaml` / `watch_models.py` sont obsolètes : les règles vivent dans `agents/<id>/config.yaml`.
 
 ## Commandes prévues (cadrage §11–12)
 
@@ -23,6 +25,7 @@ Mise en place locale (Windows) : `python -m venv .venv` puis `.venv/Scripts/pyth
 python -m watcher.run --all                  # run quotidien
 python -m watcher.run --agent NANO           # un seul agent
 python -m watcher.run --all --baseline       # premier démarrage : marque tout comme vu, sans LLM ni mail
+python -m watcher.run --test-mail            # valide la config SMTP (force WATCHER_ENV=test)
 python -m watcher.run --agent NANO --inject fixtures/nano/<cas>.md --primary   # bout en bout, force WATCHER_ENV=test
 pytest                                       # tests unitaires (sans réseau ni LLM)
 pytest tests/test_x.py::test_y               # un seul test

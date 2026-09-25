@@ -131,8 +131,13 @@ Deux canaux existent. Le cadrage envisageait le premier ; **le second est retenu
 - **URL** : `GET https://live.euronext.com/en/ajax/AwlHistoricalPrice/getFullDownloadAjax/{ISIN}-XPAR?format=csv&decimal_separator=.&date_form=d/m/Y&op=&adjusted=Y&base100=&startdate=AAAA-MM-JJ&enddate=AAAA-MM-JJ`.
 - **Format** : CSV séparé par `;`, avec un BOM et 3 lignes d'en-tête (`"Historical Data"`, période, ISIN). Colonnes : `Date;Open;High;Low;Last;Close;"Number of Shares";"Number of Trades";Turnover;vwap`. Lignes triées par date **décroissante**.
 - **Authentification** : aucune. L'endpoint n'est pas documenté officiellement mais les données viennent de la bourse elle-même, et la série est complète (le 24/09 y figure).
-- **Impact sur l'interface** : l'endpoint prend l'**ISIN + MIC** (`XPAR`), pas le symbole Yahoo. Le repli doit donc recevoir `position.isin`. Soit `PriceProvider.history` prend la `Position`, soit chaque provider dérive son identifiant de la position. À trancher à l'étape 3.
-- **Recommandation** : vu le trou de données Yahoo, envisager Euronext comme provider **principal** pour les lignes Euronext Paris et garder yfinance en repli. Le cadrage ne fixe que « yfinance en MVP, derrière une interface » ; le changement reste compatible, mais la décision revient à l'utilisateur.
+- **Impact sur l'interface** : l'endpoint prend l'**ISIN + MIC** (`XPAR`), pas le symbole Yahoo. Décision : `PriceProvider.history` reçoit la `Position` (chaque provider en dérive son identifiant : `price_symbol` pour yfinance, `isin` pour Euronext).
+
+### 6.2 bis Décision (25/09/2026)
+
+- **yfinance est le provider principal pour toutes les lignes.** C'est le seul qui couvre à la fois Euronext et les marchés US : les agents pressentis Take-Two (`TTWO`, Nasdaq, USD) et Plug Power (`PLUG`, Nasdaq, USD) s'ajouteront sans code, avec `price_symbol: TTWO` / `PLUG`.
+- **Le CSV Euronext sert de repli pour les lignes Euronext Paris** : utilisé si yfinance échoue, ou si la série yfinance présente une séance manquante récente (cas du 24/09/2026). Le repli utilisé est signalé dans le heartbeat.
+- **Lignes US** : pas de repli identifié à ce jour. À investiguer lors de l'ajout du premier agent US ; en attendant, un échec de yfinance saute les règles de prix de la ligne (comportement §8.3 du cadrage).
 
 ### 6.3 Autres pistes écartées
 
@@ -162,5 +167,5 @@ Ce problème **n'existe pas** sur le VPS ni dans le conteneur. Il ne faut rien c
 ## 9. Points ouverts pour l'utilisateur
 
 1. **Date butoir N-T1** (31/12/2027) antérieure à la fin principale estimée de NANORAY-312 dans le registre (30/06/2028) : voir §1.
-2. **Provider de cours principal** : yfinance ou Euronext (§6.2).
+2. ~~**Provider de cours principal**~~ : tranché, yfinance principal + Euronext en repli pour les lignes Euronext (§6.2 bis).
 3. **Seuils dans `_defaults.yaml`** : `rumor.promote_if_abs_move_pct: 20` et `price_anomaly.abs_move_pct: 10` sont l'inverse de la §2 du cadrage (promotion des rumeurs à 10 %, anomalie à 20 %).

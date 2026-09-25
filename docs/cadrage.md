@@ -679,12 +679,12 @@ Nanobiotix dépose une large partie de ses communiqués en formulaire 6-K (exhib
 
 ```python
 class PriceProvider(Protocol):
-    def history(self, symbol: str, sessions: int) -> list[tuple[date, float]]:
+    def history(self, position: Position, sessions: int) -> list[tuple[date, float]]:
         """Clôtures des `sessions` dernières séances, triées par date croissante."""
 ```
 
 - Implémentation MVP : `yfinance` (symboles `UBI.PA`, `NANO.PA`).
-- Non officiel, donc fragile : à valider à l'étape 0, avec identification d'un fournisseur de repli (🔲) implémentable derrière la même interface.
+- Non officiel, donc fragile : repli sur le CSV Euronext pour les lignes Euronext Paris (échec ou séance manquante). Pas de repli US identifié à ce jour. Détails : `docs/sources.md` §6.2 bis.
 - `is_new_close = last_close_date > dernière clôture déjà traitée` (stockée dans `source_state`).
 - En cas d'échec du provider : règles de prix et anomalie sautées pour ce run, avertissement dans le heartbeat. L'analyse des documents continue.
 

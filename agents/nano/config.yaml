@@ -1,0 +1,223 @@
+agent_id: NANO
+company: Nanobiotix
+context_updated_at: 2026-09-25
+thesis: >
+  Succès de la phase 3 NANORAY-312 (NCT04892173, promoteur J&J, NBTXR3 = JNJ-90301900 / JNJ-1900)
+  dans le cancer de la tête et du cou localement avancé (LA-HNSCC).
+  Critère principal : PFS (à confirmer dans le registre) ; OS = critère secondaire clé.
+
+position:
+  ticker: NANO
+  isin: FR0011341205
+  price_symbol: NANO.PA
+  listing: Euronext Paris
+  currency: EUR
+  account: CTO
+  budget_eur: 250
+  status: OWNED
+  entry_price: 22.55               
+  entry_date: 2026-09-25                
+  shares_outstanding: 50941528
+  shares_outstanding_as_of: 2026-08-31
+
+sources:
+  - name: ClinicalTrials.gov
+    type: clinicaltrials
+    primary: true
+    params: {nct_id: NCT04892173}
+  - name: SEC EDGAR
+    type: edgar
+    primary: true
+    params:
+      cik: "1760854"
+      forms: ["6-K", "20-F"]
+  - name: Google News FR
+    type: google_news_rss
+    primary: false
+    params:
+      query: 'Nanobiotix OR NBTXR3 OR "JNJ-1900" OR NANORAY-312'
+      hl: fr
+      gl: FR
+      ceid: "FR:fr"
+  - name: Google News EN
+    type: google_news_rss
+    primary: false
+    params:
+      query: 'Nanobiotix OR NBTXR3 OR "JNJ-1900" OR NANORAY-312'
+      hl: en-US
+      gl: US
+      ceid: "US:en"
+  - name: Johnson & Johnson communiqués
+    type: rss                     # désactivée (étape 0) : aucun flux, site protégé anti-bot ; voir docs/sources.md
+    primary: true
+    enabled: false
+    params: {}
+  - name: Nanobiotix IR
+    type: rss                     # désactivée (étape 0) : flux WordPress vide, redondant avec EDGAR + AMF
+    primary: true
+    enabled: false
+    params: {}
+  - name: AMF informations réglementées
+    type: dila_amf                # API info-financiere.gouv.fr (dataset flux-amf-new-prod), filtrée par ISIN
+    primary: true
+    params:
+      isin: FR0011341205
+
+keywords: [NBTXR3, JNJ-1900, JNJ-90301900, NANORAY-312, Nanobiotix, radioenhancer, LA-HNSCC]
+
+rules:
+  # ---------------------------------------------------------------- Haussiers
+  - id: N-B1
+    kind: event
+    phase: OWNED
+    direction: bullish
+    trigger: >
+      Communiqué indiquant explicitement que l'essai de phase 3 NANORAY-312 a atteint son critère
+      d'évaluation principal (« met its primary endpoint »), sans signal négatif mentionné sur la
+      survie globale ni sur la tolérance.
+    action: RECO_UNCLEAR
+    severity: CRITICAL
+    overrides:
+      - when: {metric: price_vs_entry, op: ">=", value: 2.0}
+        action: RECO_SELL_HALF
+        severity: CRITICAL
+
+  - id: N-B2
+    kind: price
+    phase: OWNED
+    direction: bullish
+    when: {metric: price_vs_entry, op: ">=", value: 2.0}
+    unless_armed: true
+    action: RECO_SELL_HALF
+    severity: HIGH
+    note: "Cours ≥ 2 × prix d'entrée, sans offre en cours."
+
+  - id: N-B3
+    kind: event
+    phase: OWNED
+    direction: bullish
+    trigger: "Offre de rachat de Nanobiotix (offre publique ou accord de rachat) par Johnson & Johnson ou un tiers."
+    figures:
+      offer_price: >
+        Prix proposé en EUR par action ordinaire Nanobiotix. Ne pas renseigner si le prix
+        n'est exprimé qu'en USD ou par ADS.
+    action: RECO_UNCLEAR
+    severity: CRITICAL
+    overrides:                    # 🔲 hypothèse : alignement sur U-B1 / U-B2, à confirmer
+      - id: N-B3
+        when: {metric: figure_vs_prev_close, figure: offer_price, op: ">=", value: 1.0}
+        action: RECO_HOLD
+        severity: CRITICAL
+        arms:
+          id: N-B3-EXIT
+          when: {metric: price_vs_figure, figure: offer_price, op: ">=", value: 0.98}
+          action: RECO_SELL_ALL
+          severity: CRITICAL
+      - id: N-B3-DECOTE
+        when: {metric: figure_vs_prev_close, figure: offer_price, op: "<", value: 1.0}
+        action: RECO_UNCLEAR
+        severity: CRITICAL
+
+  - id: N-B4
+    kind: event
+    phase: OWNED
+    direction: bullish
+    trigger: >
+      Paiement d'étape (milestone) de Johnson & Johnson à Nanobiotix, ou dépôt / acceptation
+      d'un dossier d'autorisation de mise sur le marché (BLA, MAA) pour NBTXR3.
+    action: RECO_HOLD
+    severity: INFO
+
+  # ---------------------------------------------------------------- Baissiers
+  - id: N-S1
+    kind: event
+    phase: OWNED
+    direction: bearish
+    trigger: >
+      Communiqué indiquant que l'essai NANORAY-312 n'a pas atteint son critère d'évaluation
+      principal (« did not meet its primary endpoint »).
+    action: RECO_SELL_ALL
+    severity: CRITICAL
+
+  - id: N-S2
+    kind: event
+    phase: OWNED
+    direction: bearish
+    trigger: >
+      Arrêt de l'essai NANORAY-312 pour futilité ou toxicité, ou suspension clinique
+      (clinical hold) imposée par la FDA sur NBTXR3.
+    action: RECO_SELL_ALL
+    severity: CRITICAL
+
+  - id: N-S3
+    kind: event
+    phase: OWNED
+    direction: bearish
+    trigger: >
+      Résiliation par Johnson & Johnson de l'accord de licence sur NBTXR3, ou restitution
+      des droits à Nanobiotix.
+    action: RECO_SELL_ALL
+    severity: CRITICAL
+
+  - id: N-S4
+    kind: event
+    phase: OWNED
+    direction: bearish
+    trigger: >
+      Levée de fonds ou émission d'actions / d'instruments donnant accès au capital de Nanobiotix.
+    unless_fired: [N-B1, N-S1, N-S5]   # uniquement avant la lecture des résultats
+    figures:
+      new_shares: >
+        Nombre maximal d'actions nouvelles pouvant être créées (actions émises + actions
+        sous-jacentes aux instruments).
+    action: RECO_HOLD
+    severity: INFO
+    overrides:
+      - when: {metric: dilution_pct, op: ">", value: 20}
+        action: RECO_UNCLEAR
+        severity: HIGH
+
+  - id: N-S5
+    kind: event
+    phase: OWNED
+    direction: bearish
+    trigger: >
+      Résultat de NANORAY-312 mitigé ou ambigu : critère principal atteint mais survie globale
+      défavorable, signal de toxicité, ou formulation évasive (ex. « analyses en cours »).
+    action: RECO_UNCLEAR
+    severity: CRITICAL
+
+  - id: N-T1
+    kind: time
+    phase: OWNED
+    direction: bearish
+    deadline: 2028-12-31
+    unless_fired: [N-B1, N-S1, N-S2, N-S5]
+    action: RECO_SELL_ALL
+    severity: HIGH
+    note: "Aucun résultat de NANORAY-312 publié à la date butoir."
+
+  # ---------------------------------------------------------------- Neutres
+  - id: N-N1
+    kind: event
+    phase: ANY
+    direction: neutral
+    trigger: "Décalage du calendrier de lecture des résultats de NANORAY-312."
+    action: RECO_HOLD
+    severity: INFO
+
+  - id: N-N2
+    kind: event
+    phase: ANY
+    direction: neutral
+    trigger: "Données de phase 1/2 de NBTXR3 dans d'autres indications (poumon, pancréas...)."
+    action: RECO_HOLD
+    severity: INFO
+
+  - id: N-N3
+    kind: event
+    phase: ANY
+    direction: neutral
+    trigger: "Mouvement de l'ensemble du secteur biotech (indices XBI, NBI) sans actualité propre à Nanobiotix."
+    action: IGNORE
+    severity: INFO

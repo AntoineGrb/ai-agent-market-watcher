@@ -1,0 +1,242 @@
+agent_id: UBI
+company: Ubisoft Entertainment
+context_updated_at: 2026-09-25
+thesis: >
+  Refinancement non dilutif de l'échéance obligataire de 675 M€ (nov. 2027) ;
+  optionnellement une offre publique (Tencent / famille Guillemot / tiers).
+  Le pari ne porte pas sur la qualité des jeux.
+
+position:
+  ticker: UBI
+  isin: FR0000054470
+  price_symbol: UBI.PA
+  listing: Euronext Paris
+  currency: EUR
+  account: CTO
+  budget_eur: 250
+  status: OWNED                 
+  entry_price: 5.33
+  entry_date: 2026-09-25
+  shares_outstanding: 136237168        
+  shares_outstanding_as_of: 2026-08-31
+
+sources:
+  - name: Google News FR
+    type: google_news_rss
+    primary: false
+    params:
+      query: 'Ubisoft (bourse OR action OR refinancement OR obligations OR Tencent OR Guillemot OR OPA OR "augmentation de capital")'
+      hl: fr
+      gl: FR
+      ceid: "FR:fr"
+  - name: Google News EN
+    type: google_news_rss
+    primary: false
+    params:
+      query: 'Ubisoft (shares OR refinancing OR bonds OR Tencent OR Guillemot OR takeover OR "capital increase")'
+      hl: en-US
+      gl: US
+      ceid: "US:en"
+  - name: Ubisoft Investor Center
+    type: rss                     # désactivée (étape 0) : aucun flux ; tous les communiqués sont diffusés via l'AMF
+    primary: true
+    enabled: false
+    params: {}
+  - name: AMF informations réglementées
+    type: dila_amf                # API info-financiere.gouv.fr (dataset flux-amf-new-prod), filtrée par ISIN
+    primary: true
+    params:
+      isin: FR0000054470
+
+keywords: [Ubisoft, Guillemot, Tencent, Vantage Studios, refinancement, obligations 2027,
+           OPA, offre publique, retrait obligatoire, covenant, augmentation de capital, OCEANE]
+
+rules:
+  # ---------------------------------------------------------------- Entrée (WATCH)
+  - id: U-E1
+    kind: event
+    phase: WATCH
+    direction: entry
+    trigger: >
+      Refinancement annoncé (nouvelle obligation, prêt, extension de maturité, ou opération
+      combinée avec une émission d'actions) couvrant l'échéance obligataire de novembre 2027.
+    figures:
+      new_shares: >
+        Nombre maximal d'actions nouvelles pouvant être créées par l'opération (actions émises
+        + actions sous-jacentes aux instruments donnant accès au capital). 0 si l'opération
+        ne comporte aucune composante en capital.
+    action: RECO_BUY
+    severity: HIGH
+    overrides:
+      - id: U-E2
+        when: {metric: dilution_pct, op: ">", value: 20}
+        action: RECO_NO_ENTRY
+        severity: INFO
+
+  - id: U-E3
+    kind: event
+    phase: WATCH
+    direction: entry
+    trigger: "Offre publique (OPA, OPR, OPAS) déposée ou annoncée sur les titres Ubisoft."
+    action: RECO_NO_ENTRY
+    severity: INFO
+
+  - id: U-T1
+    kind: time
+    phase: WATCH
+    direction: entry
+    deadline: 2027-06-30
+    unless_fired: [U-E1, U-E3]
+    action: RECO_NO_ENTRY
+    severity: HIGH
+    note: "Aucun refinancement annoncé à la date butoir : thèse caduque, passe l'agent en CLOSED."
+
+  # ---------------------------------------------------------------- Haussiers (OWNED)
+  - id: U-B1
+    kind: event
+    phase: OWNED
+    direction: bullish
+    trigger: "Offre publique (OPA, OPR, OPAS) déposée ou annoncée sur les titres Ubisoft."
+    figures:
+      offer_price: >
+        Prix de l'offre en EUR par action Ubisoft. Ne pas renseigner si le prix
+        n'est pas exprimé en EUR par action.
+    action: RECO_UNCLEAR
+    severity: CRITICAL
+    overrides:
+      - id: U-B1                  # offre avec prime ou au cours : surveillance armée
+        when: {metric: figure_vs_prev_close, figure: offer_price, op: ">=", value: 1.0}
+        action: RECO_HOLD
+        severity: CRITICAL
+        arms:
+          id: U-B1-EXIT
+          when: {metric: price_vs_figure, figure: offer_price, op: ">=", value: 0.98}
+          action: RECO_SELL_ALL
+          severity: CRITICAL
+      - id: U-B2                  # offre à décote
+        when: {metric: figure_vs_prev_close, figure: offer_price, op: "<", value: 1.0}
+        action: RECO_UNCLEAR
+        severity: CRITICAL
+
+  - id: U-B3
+    kind: event
+    phase: OWNED
+    direction: bullish
+    trigger: >
+      Déclaration de franchissement à la hausse du seuil de 30 % du capital ou des droits
+      de vote d'Ubisoft par Tencent, la famille Guillemot ou un groupe agissant de concert
+      (ce qui déclenche en droit français une offre obligatoire).
+    action: RECO_HOLD
+    severity: HIGH
+
+  - id: U-B4
+    kind: price
+    phase: OWNED
+    direction: bullish
+    when: {metric: price_vs_entry, op: ">=", value: 2.0}
+    unless_armed: true
+    action: RECO_SELL_HALF
+    severity: HIGH
+    note: "Cours ≥ 2 × prix d'entrée, sans offre en cours."
+
+  - id: U-B5
+    kind: event
+    phase: OWNED
+    direction: bullish
+    trigger: >
+      Déclaration de franchissement à la hausse du seuil de 5 % du capital d'Ubisoft par
+      un investisseur activiste autre qu'AJ Investments (déjà présent).
+    action: RECO_HOLD
+    severity: HIGH
+
+  # ---------------------------------------------------------------- Baissiers (OWNED)
+  - id: U-S1
+    kind: event
+    phase: OWNED
+    direction: bearish
+    trigger: >
+      Annonce d'une augmentation de capital ou d'une émission d'instruments donnant accès
+      au capital (OCEANE, BSA, OBSA, obligations convertibles).
+    figures:
+      new_shares: >
+        Nombre maximal d'actions nouvelles pouvant être créées (actions émises + actions
+        sous-jacentes aux instruments).
+    action: RECO_HOLD
+    severity: INFO
+    overrides:
+      - when: {metric: dilution_pct, op: ">", value: 20}
+        action: RECO_SELL_ALL
+        severity: CRITICAL
+
+  - id: U-S2
+    kind: event
+    phase: OWNED
+    direction: bearish
+    trigger: >
+      Bris de covenant sans waiver obtenu, défaut de paiement, ou report de paiement
+      d'une échéance de dette.
+    action: RECO_SELL_ALL
+    severity: CRITICAL
+
+  - id: U-S3
+    kind: event
+    phase: OWNED
+    direction: bearish
+    trigger: >
+      Publication ou révision de la guidance de free cash-flow, ou de la date attendue
+      de retour à un free cash-flow positif.
+    figures:
+      fcf_guidance_low_meur: >
+        Borne basse du free cash-flow guidé pour l'exercice en cours, en millions d'euros
+        (négative en cas de consommation de trésorerie, ex. -500).
+      fcf_positive_fy_end_year: >
+        Année civile de clôture de l'exercice où le retour à un free cash-flow positif
+        est attendu (ex. 2028 pour l'exercice 2027-28).
+    action: RECO_HOLD
+    severity: INFO
+    overrides:
+      - when: {metric: figure, figure: fcf_guidance_low_meur, op: "<", value: -500}
+        action: RECO_SELL_ALL
+        severity: CRITICAL
+      - when: {metric: figure, figure: fcf_positive_fy_end_year, op: ">", value: 2028}
+        action: RECO_SELL_ALL
+        severity: CRITICAL
+        if_unavailable: skip      # l'horizon de retour n'est pas toujours répété dans les publications
+
+  - id: U-S5
+    kind: event
+    phase: OWNED
+    direction: bearish
+    trigger: "Dégradation de la notation de crédit d'Ubisoft par une agence de notation."
+    action: RECO_UNCLEAR
+    severity: HIGH
+
+  - id: U-T2
+    kind: time
+    phase: OWNED
+    direction: bearish
+    max_holding_days: 365          
+    action: RECO_SELL_ALL
+    severity: HIGH
+    note: "Durée de détention maximale atteinte : sortie de la position."
+
+  # ---------------------------------------------------------------- Neutres (ANY)
+  - id: U-N1
+    kind: event
+    phase: ANY
+    direction: neutral
+    trigger: >
+      Report d'un jeu annoncé sans révision de la guidance financière
+      (si la guidance est révisée, c'est U-S3).
+    action: RECO_HOLD
+    severity: INFO
+
+  - id: U-N3
+    kind: event
+    phase: ANY
+    direction: neutral
+    trigger: >
+      Déclaration de routine de la famille Guillemot sur son engagement d'actionnaire
+      (« pas vendeurs », « engagés à long terme »).
+    action: RECO_HOLD
+    severity: INFO

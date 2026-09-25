@@ -1,0 +1,48 @@
+models:
+  triage: "anthropic:claude-haiku-4-5"
+  analysis: "anthropic:claude-sonnet-5"
+
+schedule:
+  timezone: Europe/Paris
+  heartbeat_weekday: 0            # 0 = lundi
+
+ingestion:
+  max_item_age_days: 3            # documents publiés avant : ignorés
+  max_event_age_days: 7           # matches dont event_date est plus ancienne : ignorés
+  max_doc_chars: 15000            # troncature du texte envoyé à l'analyse
+  triage_batch_size: 50
+
+guardrails:
+  actionable_actions: [RECO_SELL_ALL, RECO_SELL_HALF, RECO_BUY]
+  min_confidence_actionable: 0.8
+
+rumor:
+  severity: INFO
+  promote_if_abs_move_pct: 10
+  promoted_severity: HIGH
+
+price_anomaly:
+  rule_id: P-ANOMALY
+  abs_move_pct: 20
+  quiet_days: 3                   # « sans actu » = aucun match ce run et aucun événement envoyé depuis 3 jours
+  action: RECO_UNCLEAR
+  severity: HIGH
+
+missing_figures:
+  action: RECO_UNCLEAR
+  severity: HIGH
+
+priority: [RECO_SELL_ALL, RECO_SELL_HALF, RECO_UNCLEAR, RECO_BUY, RECO_NO_ENTRY, RECO_HOLD, IGNORE]
+
+dedup:
+  event_window_days: 30
+
+digest:
+  send_if_empty: false
+
+heartbeat:
+  context_max_age_days: 90
+  time_stop_warning_days: 30
+
+llm_budget:
+  max_total_tokens_per_run: 300000

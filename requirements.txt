@@ -1,0 +1,10 @@
+# Dépendances d'exécution — versions épinglées (vérifiées le 25/09/2026)
+pydantic-ai-slim[anthropic]==2.50.0
+pydantic==2.13.5
+httpx==0.28.1
+feedparser==6.0.14
+PyYAML==6.0.3
+yfinance==1.7.0
+pypdf==6.19.0            # texte des communiqués AMF (PDF)
+beautifulsoup4==4.15.0   # texte des exhibits EDGAR (HTML)
+lxml==6.1.3

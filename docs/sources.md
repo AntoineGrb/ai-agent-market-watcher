@@ -109,6 +109,10 @@ Deux canaux existent. Le cadrage envisageait le premier ; **le second est retenu
   - Pour obtenir l'URL de l'éditeur : charger `news.google.com/articles/<id>` avec le cookie `SOCS=CAI`, lire les attributs `data-n-a-sg` et `data-n-a-ts`, puis appeler `POST news.google.com/_/DotsSplashUi/data/batchexecute` (RPC `Fbv4je`). Test réussi sur 5 articles sur 5.
   - Cette API est **interne et non documentée**, donc fragile. `fetch_text` doit fonctionner en « meilleur effort » : si le décodage ou le téléchargement de l'article échoue (paywall, anti-bot), il se replie sur le titre et l'éditeur. Comme la source n'est pas primaire, cela n'affecte jamais une recommandation actionnable.
 - **Authentification** : aucune. Pas de limite publiée : rester à quelques requêtes par run.
+- **Constats de l'étape 3 (26/09/2026)** :
+  - le cookie `SOCS=CAI` doit être posé dans le **jar** du client (domaine `.google.com`) : Google répond d'abord par un 302 qui pose d'autres cookies, et un simple en-tête `Cookie` mène à `consent.google.com` ;
+  - `news.google.com/articles/<id>` renvoie **HTTP 429** après quelques dizaines d'appels rapprochés (essais de diagnostic), limitation levée au bout de quelques minutes. Les agents tournant l'un après l'autre, les décodages d'un agent pourraient faire bloquer les flux RSS des suivants. Parades dans le fetcher : décodages sans retry, espacés d'1 s, plafonnés à 20 par run, et coupés pour tout le reste du run au premier 429 (disjoncteur) ; les flux RSS ne sont jamais coupés ;
+  - certains éditeurs bloquent les robots (ex. boursier.com) : repli titre + éditeur, sans effet sur le disjoncteur. Essai du 26/09 : 2 articles sur 3 récupérés en texte complet.
 
 ## 5. Johnson & Johnson (désactivée)
 

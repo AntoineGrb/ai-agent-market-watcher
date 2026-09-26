@@ -43,3 +43,23 @@ def test_duplicate_registration_refused() -> None:
 
 def test_unregistered_type_is_not_a_config_error() -> None:
     base.validate_source_params(Source(name="EDGAR", type="edgar", primary=True))
+
+
+def test_builtin_fetchers_validate_repo_configs() -> None:
+    import httpx
+
+    from watcher.config import load_agents
+    from watcher.settings import Settings
+    from watcher.sources import register_builtin_fetchers
+    from tests.conftest import OFFLINE, REPO_AGENTS_DIR
+
+    register_builtin_fetchers(Settings(sec_user_agent="test contact@example.com"), OFFLINE)
+    register_builtin_fetchers(Settings(), OFFLINE)          # idempotent
+    assert sorted(base._REGISTRY) == ["clinicaltrials", "dila_amf", "edgar", "google_news_rss", "rss"]
+    loaded = load_agents(REPO_AGENTS_DIR, validate_source=base.validate_source_params)
+    assert loaded.errors == {} and sorted(loaded.configs) == ["NANO", "UBI"]
+
+
+def test_item_id_is_stable_and_separates_parts() -> None:
+    assert base.item_id("edgar", "0001") == base.item_id("edgar", "0001")
+    assert base.item_id("ab", "c") != base.item_id("a", "bc")

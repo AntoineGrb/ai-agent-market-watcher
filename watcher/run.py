@@ -5,9 +5,9 @@ Orchestration d'un run (cadrage §3.1). Invariants :
 - l'état d'un agent (seen_items, events, source_state...) n'est commité que si l'agent a réussi ;
 - Healthchecks reçoit /start puis succès ou /fail (runs `--all` uniquement : le check surveille le cron quotidien).
 
-Étapes 1 et 2 du plan : chargement des configs, erreurs de config, store, monitoring, moteur déterministe
-(résolution, règles price / time / surveillances / anomalie, dédoublonnage, outbox) et envoi de l'outbox.
-Les étapes 3 à 6 du pipeline (cours, sources, tri, analyse) sont branchées aux étapes 3 et 4 du plan.
+Étapes 1 à 3 du plan : chargement des configs, erreurs de config, store, monitoring, cours et fetch des sources
+(`ingest`), moteur déterministe (résolution, règles price / time / surveillances / anomalie, dédoublonnage,
+outbox) et envoi de l'outbox. Le tri et l'analyse LLM (étapes 5 et 6 du pipeline) arrivent à l'étape 4 du plan.
 """
 
 from __future__ import annotations
@@ -19,6 +19,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+import httpx
+
 from watcher.config import (
     AgentConfig,
     AgentLoadError,
@@ -29,12 +31,16 @@ from watcher.config import (
     load_defaults,
 )
 from watcher.engine.pipeline import evaluate_agent
+from watcher.ingest import gather
 from watcher.monitoring import Healthchecks, setup_logging
 from watcher.notify import templates
 from watcher.notify.dispatch import send_outbox
 from watcher.notify.mailer import Mailer, MailError
+from watcher.prices import EuronextProvider, PriceService, YFinanceProvider
 from watcher.settings import PROJECT_ROOT, Settings, SettingsError
+from watcher.sources import register_builtin_fetchers
 from watcher.sources.base import validate_source_params
+from watcher.sources.http import build_client
 from watcher.store import RunTotals, Store
 
 log = logging.getLogger("watcher.run")
@@ -45,6 +51,13 @@ EXIT_USAGE = 2
 
 GLOBAL_ERROR_KEY = "_global"
 MAIL_ERROR_KEY = "_mail"
+WARNINGS_KEY = "_warnings"     # dans runs.errors_json : sources / cours en erreur, sans effet sur le statut du run
+
+
+@dataclass
+class AgentOutcome:
+    alerts_created: int = 0
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -55,6 +68,7 @@ class RunReport:
     agents_failed: list[str] = field(default_factory=list)
     alerts_created: int = 0
     errors: dict[str, str] = field(default_factory=dict)
+    warnings: dict[str, list[str]] = field(default_factory=dict)   # par agent ; remontés dans le heartbeat
 
     def add_error(self, key: str, message: str) -> None:
         self.errors[key] = f"{self.errors[key]} ; {message}" if key in self.errors else message
@@ -72,7 +86,14 @@ class RunReport:
         lines = [f"run {self.run_id} : {self.status}, agents OK : {len(self.agents_ok)}, "
                  f"en échec : {len(self.agents_failed)}"]
         lines += [f"- {key} : {message}" for key, message in self.errors.items()]
+        lines += [f"- avertissement {agent} : {w}" for agent, ws in self.warnings.items() for w in ws]
         return "\n".join(lines)
+
+    def persisted_errors(self) -> dict[str, object] | None:
+        payload: dict[str, object] = dict(self.errors)
+        if self.warnings:
+            payload[WARNINGS_KEY] = self.warnings
+        return payload or None
 
 
 class Runner:
@@ -83,12 +104,14 @@ class Runner:
         mailer: Mailer,
         healthchecks: Healthchecks,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        prices: PriceService | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
         self.mailer = mailer
         self.hc = healthchecks
         self.clock = clock
+        self.prices = prices
 
     def run(self, *, now: datetime, only: str | None = None, baseline: bool = False) -> RunReport:
         """Exécute un run complet. `now` est injecté (UTC, avec fuseau) : jamais d'horloge en dur plus bas."""
@@ -110,7 +133,7 @@ class Runner:
             agents_ok=len(report.agents_ok),
             agents_failed=len(report.agents_failed),
             alerts_created=report.alerts_created,
-            errors=report.errors or None,
+            errors=report.persisted_errors(),
         ))
         log.info(report.summary())
         if monitored:
@@ -133,14 +156,16 @@ class Runner:
             self.store.resolve_config_errors(agent_id, now)
             try:
                 with self.store.transaction():
-                    created = self._process_agent(cfg, defaults, now=now, baseline=baseline)
+                    outcome = self._process_agent(cfg, defaults, now=now, baseline=baseline)
             except Exception as exc:
                 log.exception("agent %s en échec, état non commité", agent_id)
                 report.agents_failed.append(agent_id)
                 report.errors[agent_id] = f"{type(exc).__name__} : {exc}"
             else:
                 report.agents_ok.append(agent_id)
-                report.alerts_created += created
+                report.alerts_created += outcome.alerts_created
+                if outcome.warnings:
+                    report.warnings[agent_id] = outcome.warnings
 
         if not baseline:
             self._send_outbox(report, defaults, now=now)
@@ -168,14 +193,14 @@ class Runner:
         else:
             self.store.mark_config_error_notified(error.agent_id, error.fingerprint, now)
 
-    def _process_agent(self, cfg: AgentConfig, defaults: Defaults, *, now: datetime, baseline: bool) -> int:
-        """Traite un agent dans sa transaction. Retourne le nombre d'alertes écrites dans l'outbox."""
+    def _process_agent(self, cfg: AgentConfig, defaults: Defaults, *, now: datetime, baseline: bool) -> AgentOutcome:
+        """Traite un agent dans sa transaction : alertes écrites dans l'outbox et avertissements (sources, cours)."""
         agent_id = cfg.agent_id
         if cfg.position.status == "CLOSED":
             if cancelled := self.store.cancel_armed_watches(agent_id, now):
                 log.info("%s : %d surveillance(s) armée(s) annulée(s) (position CLOSED)", agent_id, cancelled)
             log.info("%s : statut CLOSED, agent ignoré", agent_id)
-            return 0
+            return AgentOutcome()
         today = now.astimezone(defaults.schedule.tz).date()
         fired = self.store.fired_rule_ids(agent_id)
         active = cfg.active_rules(fired)
@@ -183,14 +208,19 @@ class Runner:
         log.info("%s : statut %s, %d règle(s) active(s) sur %d, %d source(s) active(s) sur %d, jour %s",
                  agent_id, cfg.position.status, len(active), len(cfg.rules), len(sources), len(cfg.sources),
                  today.isoformat())
+        # Étapes 3 et 4 du pipeline : cours (et dernière clôture traitée), fetch des sources.
+        inputs = gather(self.store, cfg, defaults, self.prices, now=now)
         if baseline:
-            log.info("%s : baseline demandée, aucun fetcher disponible avant l'étape 3", agent_id)
-            return 0
-        # Étapes 3 à 6 du pipeline (cours, sources, tri, analyse) : étapes 3 et 4 du plan. D'ici là, ni cours
-        # ni match : seules les règles time peuvent se déclencher.
-        evaluation = evaluate_agent(self.store, cfg, defaults, matches=[], items={}, price=None, now=now,
+            # Premier démarrage : tout ce qui existe est marqué vu, sans tri, sans analyse, sans alerte (§11.7).
+            self.store.mark_seen(inputs.items, now)
+            log.info("%s : baseline, %d document(s) marqué(s) vu(s)", agent_id, len(inputs.items))
+            return AgentOutcome(warnings=inputs.warnings)
+        # Étapes 5 et 6 (tri, analyse) : étape 4 du plan. D'ici là, aucun match, et les documents ne sont pas
+        # marqués vus pour être analysés dès que la couche LLM sera branchée.
+        log.info("%s : %d document(s) en attente de la couche LLM (étape 4 du plan)", agent_id, len(inputs.items))
+        evaluation = evaluate_agent(self.store, cfg, defaults, matches=[], items={}, price=inputs.price, now=now,
                                     fired=fired)
-        return len(evaluation.emitted)
+        return AgentOutcome(alerts_created=len(evaluation.emitted), warnings=inputs.warnings)
 
 
 # --------------------------------------------------------------------------- CLI
@@ -206,6 +236,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--baseline", action="store_true",
                         help="premier démarrage : marque tous les documents comme vus, sans LLM ni mail")
     return parser
+
+
+def build_price_service(client: httpx.Client) -> PriceService:
+    """yfinance pour toutes les lignes, repli CSV Euronext pour Euronext Paris (docs/sources.md §6.2 bis)."""
+    return PriceService(YFinanceProvider(), euronext_fallback=EuronextProvider(client))
 
 
 def _load_dotenv() -> None:
@@ -252,8 +287,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return EXIT_USAGE
 
     healthchecks = Healthchecks(settings.healthchecks_url, enabled=settings.healthchecks_enabled)
-    with Store.open(settings.db_path) as store:
-        report = Runner(settings, store, mailer, healthchecks).run(
+    with build_client() as client, Store.open(settings.db_path) as store:
+        register_builtin_fetchers(settings, client)
+        report = Runner(settings, store, mailer, healthchecks, prices=build_price_service(client)).run(
             now=now, only=args.agent, baseline=args.baseline
         )
     return EXIT_OK if report.status == "ok" else EXIT_FAILED

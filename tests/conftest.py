@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 import yaml
 
@@ -14,12 +15,20 @@ from watcher.engine.metrics import daily_move_pct
 from watcher.models import NewsItem, PriceSnapshot, RuleMatch
 from watcher.notify.mailer import Mail, MailError
 from watcher.settings import PROJECT_ROOT, Settings
+from watcher.sources.http import build_client
 from watcher.store import Store
 
 REPO_AGENTS_DIR = PROJECT_ROOT / "agents"
+SOURCES_DATA = Path(__file__).parent / "data" / "sources"   # réponses réelles enregistrées à l'étape 0
 NOW = datetime(2026, 9, 25, 5, 0, tzinfo=UTC)   # 07:00 Europe/Paris
 TODAY = date(2026, 9, 25)                        # vendredi ; dernière séance : jeudi 24/09
 LAST_CLOSE_DATE = date(2026, 9, 24)
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_pause(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Les retries HTTP gardent leur nombre, sans les pauses réelles entre tentatives."""
+    monkeypatch.setattr("watcher.sources.http.RETRY_BACKOFF_S", 0.0)
 
 
 @pytest.fixture
@@ -81,6 +90,38 @@ class FakeHealthchecks:
 
     def fail(self, body: str) -> None:
         self.calls.append(("fail", body))
+
+
+# --------------------------------------------------------------------------- HTTP simulé (fetchers, cours)
+
+
+Route = httpx.Response | Callable[[httpx.Request], httpx.Response]
+
+
+class Router:
+    """Transport httpx sans réseau : répond selon `scheme://hôte/chemin` (sans la query) et garde les requêtes."""
+
+    def __init__(self, routes: dict[str, Route] | None = None) -> None:
+        self.routes: dict[str, Route] = dict(routes or {})
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        key = str(request.url.copy_with(query=None))
+        route = self.routes.get(key)
+        if route is None:
+            return httpx.Response(404, text=f"route non simulée : {key}")
+        return route(request) if callable(route) else route
+
+    def client(self) -> httpx.Client:
+        return build_client(httpx.MockTransport(self))
+
+
+OFFLINE = Router().client()   # client sans réseau ni contexte TLS : validation de paramètres, textes en cache
+
+
+def data_file(name: str) -> bytes:
+    return (SOURCES_DATA / name).read_bytes()
 
 
 # --------------------------------------------------------------------------- moteur : objets de test

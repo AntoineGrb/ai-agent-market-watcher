@@ -9,9 +9,12 @@ from typing import Any
 import httpx
 import pytest
 import yaml
+from pydantic_ai.messages import ModelMessage, ModelResponse, RetryPromptPart, ToolCallPart, UserPromptPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from watcher.config import AgentConfig, Defaults, load_agent, load_defaults
 from watcher.engine.metrics import daily_move_pct
+from watcher.llm import LlmLayer
 from watcher.models import NewsItem, PriceSnapshot, RuleMatch
 from watcher.notify.mailer import Mail, MailError
 from watcher.settings import PROJECT_ROOT, Settings
@@ -181,3 +184,56 @@ def rule_match(
     return RuleMatch(rule_id=rule_id, item_ids=list(item_ids), headline=f"Événement {rule_id}",
                      rationale="Passage clé du document.", confidence=confidence, event_date=event_date,
                      extracted_figures=figures)
+
+
+# --------------------------------------------------------------------------- LLM simulé (PydanticAI)
+
+
+class ScriptedModel(FunctionModel):
+    """Modèle de test : renvoie successivement les sorties structurées données (la dernière est répétée).
+
+    `calls` garde les messages de chaque requête, pour vérifier les consignes et les retries.
+    """
+
+    def __init__(self, *outputs: dict[str, Any]) -> None:
+        self.outputs = list(outputs) or [{}]
+        self.calls: list[list[ModelMessage]] = []
+        super().__init__(self._respond)
+
+    def _respond(self, messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        self.calls.append(messages)
+        args = self.outputs[min(len(self.calls), len(self.outputs)) - 1]
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, args)])
+
+    def prompt(self, call: int = 0) -> str:
+        """Texte du message utilisateur de la requête `call`."""
+        return next(p.content for p in self.calls[call][0].parts if isinstance(p, UserPromptPart))
+
+    def instructions(self, call: int = 0) -> str:
+        return self.calls[call][0].instructions or ""
+
+    def retry_feedback(self, call: int) -> str:
+        return next(str(p.content) for p in self.calls[call][-1].parts if isinstance(p, RetryPromptPart))
+
+
+def triage_output(*refs: str) -> dict[str, Any]:
+    return {"relevant_ids": list(refs)}
+
+
+def match_output(rule_id: str, *refs: str, confidence: float = 0.9, event_date: str = "2026-09-24",
+                 **figures: float) -> dict[str, Any]:
+    return {"rule_id": rule_id, "item_ids": list(refs) or ["D1"], "headline": f"Événement {rule_id}",
+            "rationale": "« Passage clé. »", "confidence": confidence, "event_date": event_date,
+            "extracted_figures": figures}
+
+
+def analysis_output(*matches: dict[str, Any]) -> dict[str, Any]:
+    return {"matches": list(matches)}
+
+
+def llm_layer(settings: Settings, triage: ScriptedModel | None = None, analysis: ScriptedModel | None = None,
+              text_fetcher: Callable[[NewsItem], str] | None = None) -> LlmLayer:
+    """Couche LLM sans réseau : par défaut, le tri ne retient rien."""
+    return LlmLayer(settings, triage_model=triage or ScriptedModel(triage_output()),
+                    analysis_model=analysis or ScriptedModel(analysis_output()),
+                    text_fetcher=text_fetcher or (lambda item: f"Texte complet de {item.title}"))

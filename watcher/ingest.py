@@ -10,6 +10,7 @@ Aucune erreur de cours ou de source ne fait échouer l'agent : elle est loggée 
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
@@ -92,10 +93,21 @@ def fetch_sources(store: Store, cfg: AgentConfig, defaults: Defaults, *, now: da
 
 
 def gather(
-    store: Store, cfg: AgentConfig, defaults: Defaults, prices: PriceService | None, *, now: datetime
+    store: Store,
+    cfg: AgentConfig,
+    defaults: Defaults,
+    prices: PriceService | None,
+    *,
+    now: datetime,
+    injected: Sequence[NewsItem] | None = None,
 ) -> AgentInputs:
+    """Cours puis documents. `injected` (`--inject`) remplace le fetch des sources, sans filtre « déjà vu »."""
     inputs = AgentInputs()
     today = now.astimezone(defaults.schedule.tz).date()
     load_price(store, cfg, prices, today=today, now=now, inputs=inputs)
-    fetch_sources(store, cfg, defaults, now=now, inputs=inputs)
+    if injected is not None:
+        inputs.items = list(injected)
+        log.info("%s : %d document(s) injecté(s), sources non interrogées", cfg.agent_id, len(inputs.items))
+    else:
+        fetch_sources(store, cfg, defaults, now=now, inputs=inputs)
     return inputs

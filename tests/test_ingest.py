@@ -13,7 +13,7 @@ from watcher.run import Runner
 from watcher.settings import Settings
 from watcher.sources import base
 from watcher.store import Store
-from tests.conftest import NOW, FakeHealthchecks, FakeMailer, repo_agent
+from tests.conftest import NOW, FakeHealthchecks, FakeMailer, llm_layer, repo_agent
 
 COMPLETE = [(date(2026, 9, 22), 5.00), (date(2026, 9, 23), 5.00), (date(2026, 9, 24), 6.50)]   # +30 % J-1
 
@@ -133,7 +133,8 @@ def test_price_failure_is_a_warning(store: Store, defaults: Defaults, registry) 
 
 def _runner(settings: Settings, store: Store, prices: PriceService | None = None) -> tuple[Runner, FakeMailer]:
     mailer = FakeMailer()
-    return Runner(settings, store, mailer, FakeHealthchecks(), clock=lambda: NOW, prices=prices), mailer
+    return Runner(settings, store, mailer, FakeHealthchecks(), clock=lambda: NOW, prices=prices,
+                  llm=llm_layer(settings)), mailer
 
 
 def test_baseline_marks_everything_seen_without_alert(settings: Settings, store: Store, registry) -> None:
@@ -152,14 +153,14 @@ def test_baseline_marks_everything_seen_without_alert(settings: Settings, store:
     assert store.pending_events() == []
 
 
-def test_normal_run_uses_price_and_leaves_documents_unseen(settings: Settings, store: Store, registry) -> None:
+def test_normal_run_uses_price_and_marks_documents_seen(settings: Settings, store: Store, registry) -> None:
     _register(registry, FakeFetcher("dila_amf", [_item("a")]))
     runner, mailer = _runner(settings, store, StubPrices())
 
     report = runner.run(now=NOW)
 
     assert report.status == "ok"                                        # un avertissement n'est pas une erreur
-    assert store.seen_item_ids("UBI", ["a"]) == set()                  # en attente du tri (étape 4)
+    assert store.seen_item_ids("UBI", ["a"]) == {"a"}                  # trié (non retenu), donc vu
     # +30 % J-1 sans actualité : le cours alimente bien les règles déterministes.
     assert "P-ANOMALY" in store.fired_rule_ids("UBI") and "P-ANOMALY" in store.fired_rule_ids("NANO")
     assert mailer.sent and store.pending_events() == []

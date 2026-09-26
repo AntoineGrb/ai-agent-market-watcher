@@ -11,6 +11,7 @@ ingestion:
   max_event_age_days: 7           # matches dont event_date est plus ancienne : ignorés
   max_doc_chars: 15000            # troncature du texte envoyé à l'analyse
   triage_batch_size: 50
+  analysis_batch_size: 10        # documents retenus par appel d'analyse
 
 guardrails:
   actionable_actions: [RECO_SELL_ALL, RECO_SELL_HALF, RECO_BUY]

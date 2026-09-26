@@ -6,6 +6,10 @@ requires-python = ">=3.12,<3.13"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-m 'not eval'"
+filterwarnings = [
+    # pydantic_graph (run_sync de PydanticAI) sous Python 3.12 : sans effet sur le comportement.
+    "ignore:There is no current event loop:DeprecationWarning:pydantic_graph",
+]
 markers = [
     "eval: appels LLM réels, lancés à la demande (pytest -m eval)",
 ]

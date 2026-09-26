@@ -2,6 +2,8 @@
 
 `agents/_defaults.yaml` est global : s'il est invalide, le run entier échoue.
 `agents/<id>/config.yaml` est validé séparément : une config invalide désactive uniquement cet agent.
+`agents/<id>/prompt.md` (consignes rédactionnelles de l'agent d'analyse, cadrage §7.4) est chargé avec la config :
+absent ou vide, il rend la config invalide.
 """
 
 from __future__ import annotations
@@ -17,12 +19,13 @@ from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, field_validator, model_validator
 
 log = logging.getLogger(__name__)
 
 DEFAULTS_FILE = "_defaults.yaml"
 AGENT_CONFIG_FILE = "config.yaml"
+AGENT_PROMPT_FILE = "prompt.md"
 
 
 class ConfigError(Exception):
@@ -202,6 +205,17 @@ class AgentConfig(_Strict):
     keywords: list[str]
     rules: list[Rule]
 
+    # Contenu de prompt.md : hors du YAML (attribut privé), renseigné par `load_agent`.
+    _prompt: str = PrivateAttr(default="")
+
+    @property
+    def prompt(self) -> str:
+        return self._prompt
+
+    def with_prompt(self, prompt: str) -> AgentConfig:
+        self._prompt = prompt
+        return self
+
     @model_validator(mode="after")
     def _consistency(self) -> AgentConfig:
         ids = [r.id for r in self.rules]
@@ -262,6 +276,7 @@ class IngestionDefaults(_Strict):
     max_event_age_days: int = Field(gt=0)
     max_doc_chars: int = Field(gt=0)
     triage_batch_size: int = Field(gt=0)
+    analysis_batch_size: int = Field(default=10, gt=0)   # documents par appel d'analyse (textes complets)
 
 
 class GuardrailsDefaults(_Strict):
@@ -375,6 +390,16 @@ def _read_yaml(path: Path) -> Any:
         raise ConfigError(f"YAML invalide dans {path.name} : {exc}") from exc
 
 
+def _read_prompt(path: Path) -> str:
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError as exc:
+        raise ConfigError(f"fichier absent : {path.name} (consignes de l'agent d'analyse)") from exc
+    if not text:
+        raise ConfigError(f"{path.name} est vide")
+    return text
+
+
 def load_defaults(agents_dir: Path) -> Defaults:
     data = _read_yaml(agents_dir / DEFAULTS_FILE)
     try:
@@ -403,6 +428,7 @@ def load_agent(agent_dir: Path, validate_source: SourceValidator | None = None) 
         raise ConfigError(format_validation_error(exc)) from exc
     if cfg.agent_id != expected_id:
         raise ConfigError(f"agent_id {cfg.agent_id!r} différent du nom du dossier (attendu {expected_id!r})")
+    cfg.with_prompt(_read_prompt(agent_dir / AGENT_PROMPT_FILE))
     if validate_source is not None:
         for source in cfg.enabled_sources():
             try:

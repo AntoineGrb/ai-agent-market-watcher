@@ -86,13 +86,13 @@ def test_agent_exception_rolls_back_and_spares_others(settings: Settings, store:
                                                       monkeypatch: pytest.MonkeyPatch) -> None:
     original = Runner._process_agent
 
-    def flaky(self, cfg, defaults, *, now, baseline):
+    def flaky(self, cfg, defaults, *, now, baseline, **kwargs):
         item = NewsItem(id=f"{cfg.agent_id}-1", agent_id=cfg.agent_id, source_name="s", source_type="rss",
                         source_primary=False, url="https://example.com/a", title="t", published_at=now)
         self.store.mark_seen([item], now)
         if cfg.agent_id == "NANO":
             raise RuntimeError("API LLM indisponible")
-        return original(self, cfg, defaults, now=now, baseline=baseline)
+        return original(self, cfg, defaults, now=now, baseline=baseline, **kwargs)
 
     monkeypatch.setattr(Runner, "_process_agent", flaky)
     runner, _, hc = _runner(settings, store)

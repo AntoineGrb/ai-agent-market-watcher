@@ -19,7 +19,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from watcher.models import Alert, NewsItem
+from watcher.config import Action, Arm, Severity
+from watcher.models import Alert, AlertOrigin, NewsItem
 
 log = logging.getLogger(__name__)
 
@@ -135,6 +136,21 @@ class EventRow:
     created_at: str
     sent_at: str | None
     alert: Alert
+
+
+@dataclass(frozen=True)
+class ArmedWatch:
+    id: int
+    agent_id: str
+    arm_id: str
+    source_event_id: int
+    metric: str
+    ref_value: float
+    op: str
+    threshold: float
+    action: Action
+    severity: Severity
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -361,12 +377,8 @@ class Store:
         )
         return int(cur.lastrowid)
 
-    def pending_events(self) -> list[EventRow]:
-        """Toutes les alertes non envoyées, y compris celles des runs précédents."""
-        rows = self._conn.execute(
-            """SELECT id, agent_id, dedup_key, created_at, sent_at, payload_json FROM events
-               WHERE sent_at IS NULL ORDER BY created_at, id"""
-        ).fetchall()
+    @staticmethod
+    def _event_rows(rows: Iterable[sqlite3.Row]) -> list[EventRow]:
         return [
             EventRow(
                 id=r["id"], agent_id=r["agent_id"], dedup_key=r["dedup_key"], created_at=r["created_at"],
@@ -375,8 +387,75 @@ class Store:
             for r in rows
         ]
 
+    def pending_events(self) -> list[EventRow]:
+        """Toutes les alertes non envoyées, y compris celles des runs précédents."""
+        rows = self._conn.execute(
+            """SELECT id, agent_id, dedup_key, created_at, sent_at, payload_json FROM events
+               WHERE sent_at IS NULL ORDER BY created_at, id"""
+        ).fetchall()
+        return self._event_rows(rows)
+
+    def events_by_key(self, agent_id: str, dedup_key: str, since: datetime | None = None) -> list[EventRow]:
+        """Événements de même clé de dédoublonnage, créés depuis `since` (tout l'historique si None)."""
+        query = """SELECT id, agent_id, dedup_key, created_at, sent_at, payload_json FROM events
+                   WHERE agent_id = ? AND dedup_key = ?"""
+        params: list[Any] = [agent_id, dedup_key]
+        if since is not None:
+            query += " AND created_at >= ?"
+            params.append(ts(since))
+        return self._event_rows(self._conn.execute(query + " ORDER BY created_at, id", params).fetchall())
+
+    def has_events_since(self, agent_id: str, since: datetime, origins: Iterable[AlertOrigin]) -> bool:
+        """Au moins une alerte des origines données créée depuis `since` (sert à `quiet_days`)."""
+        origins = list(origins)
+        row = self._conn.execute(
+            f"""SELECT 1 FROM events WHERE agent_id = ? AND created_at >= ?
+                AND origin IN ({','.join('?' * len(origins))}) LIMIT 1""",
+            (agent_id, ts(since), *origins),
+        ).fetchone()
+        return row is not None
+
     def mark_sent(self, event_ids: Iterable[int], now: datetime) -> None:
         self._conn.executemany(
             "UPDATE events SET sent_at = ? WHERE id = ? AND sent_at IS NULL",
             [(ts(now), event_id) for event_id in event_ids],
         )
+
+    # ------------------------------------------------------------------ surveillances armées
+
+    def create_armed_watch(self, agent_id: str, arm: Arm, ref_value: float, source_event_id: int,
+                           now: datetime) -> int:
+        cur = self._conn.execute(
+            """INSERT INTO armed_watches (agent_id, arm_id, source_event_id, metric, ref_value, op, threshold,
+                                          action, severity, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)""",
+            (agent_id, arm.id, source_event_id, arm.when.metric, ref_value, arm.when.op, arm.when.value,
+             arm.action.value, arm.severity.value, ts(now)),
+        )
+        return int(cur.lastrowid)
+
+    def active_armed_watches(self, agent_id: str) -> list[ArmedWatch]:
+        rows = self._conn.execute(
+            """SELECT id, agent_id, arm_id, source_event_id, metric, ref_value, op, threshold, action, severity,
+                      created_at
+               FROM armed_watches WHERE agent_id = ? AND status = 'active' ORDER BY created_at, id""",
+            (agent_id,),
+        ).fetchall()
+        return [
+            ArmedWatch(**{**dict(r), "action": Action(r["action"]), "severity": Severity(r["severity"])})
+            for r in rows
+        ]
+
+    def mark_watch_fired(self, watch_id: int, now: datetime) -> None:
+        self._conn.execute(
+            "UPDATE armed_watches SET status = 'fired', closed_at = ? WHERE id = ? AND status = 'active'",
+            (ts(now), watch_id),
+        )
+
+    def cancel_armed_watches(self, agent_id: str, now: datetime) -> int:
+        """Annule les surveillances actives de l'agent (position passée en CLOSED)."""
+        cur = self._conn.execute(
+            "UPDATE armed_watches SET status = 'cancelled', closed_at = ? WHERE agent_id = ? AND status = 'active'",
+            (ts(now), agent_id),
+        )
+        return cur.rowcount

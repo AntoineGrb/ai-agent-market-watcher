@@ -79,9 +79,16 @@ class Arm(_Strict):
     """Surveillance persistante créée à la détection d'un événement, évaluée par le code à chaque run."""
 
     id: str
-    when: Condition           # typiquement price_vs_figure
+    when: Condition           # price_vs_figure : cours rapporté au chiffre de référence stocké à l'armement
     action: Action
     severity: Severity
+
+    @model_validator(mode="after")
+    def _price_vs_figure(self) -> Arm:
+        # armed_watches.ref_value est obligatoire, et toute autre métrique serait constante d'un run à l'autre.
+        if self.when.metric != "price_vs_figure":
+            raise ValueError(f"{self.id} : une surveillance armée doit utiliser la métrique price_vs_figure")
+        return self
 
 
 class Override(_Strict):

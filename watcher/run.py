@@ -5,8 +5,9 @@ Orchestration d'un run (cadrage §3.1). Invariants :
 - l'état d'un agent (seen_items, events, source_state...) n'est commité que si l'agent a réussi ;
 - Healthchecks reçoit /start puis succès ou /fail (runs `--all` uniquement : le check surveille le cron quotidien).
 
-Étape 1 du plan : chargement des configs, erreurs de config, store, monitoring. Les étapes 3 à 11 du pipeline
-(cours, sources, LLM, moteur, envoi) sont branchées aux étapes 2 à 5 du plan.
+Étapes 1 et 2 du plan : chargement des configs, erreurs de config, store, monitoring, moteur déterministe
+(résolution, règles price / time / surveillances / anomalie, dédoublonnage, outbox) et envoi de l'outbox.
+Les étapes 3 à 6 du pipeline (cours, sources, tri, analyse) sont branchées aux étapes 3 et 4 du plan.
 """
 
 from __future__ import annotations
@@ -27,8 +28,10 @@ from watcher.config import (
     load_agents,
     load_defaults,
 )
+from watcher.engine.pipeline import evaluate_agent
 from watcher.monitoring import Healthchecks, setup_logging
 from watcher.notify import templates
+from watcher.notify.dispatch import send_outbox
 from watcher.notify.mailer import Mailer, MailError
 from watcher.settings import PROJECT_ROOT, Settings, SettingsError
 from watcher.sources.base import validate_source_params
@@ -50,7 +53,11 @@ class RunReport:
     status: str = "running"
     agents_ok: list[str] = field(default_factory=list)
     agents_failed: list[str] = field(default_factory=list)
+    alerts_created: int = 0
     errors: dict[str, str] = field(default_factory=dict)
+
+    def add_error(self, key: str, message: str) -> None:
+        self.errors[key] = f"{self.errors[key]} ; {message}" if key in self.errors else message
 
     def finalize(self) -> str:
         if GLOBAL_ERROR_KEY in self.errors or (self.agents_failed and not self.agents_ok):
@@ -102,6 +109,7 @@ class Runner:
             status=report.status,
             agents_ok=len(report.agents_ok),
             agents_failed=len(report.agents_failed),
+            alerts_created=report.alerts_created,
             errors=report.errors or None,
         ))
         log.info(report.summary())
@@ -125,15 +133,26 @@ class Runner:
             self.store.resolve_config_errors(agent_id, now)
             try:
                 with self.store.transaction():
-                    self._process_agent(cfg, defaults, now=now, baseline=baseline)
+                    created = self._process_agent(cfg, defaults, now=now, baseline=baseline)
             except Exception as exc:
                 log.exception("agent %s en échec, état non commité", agent_id)
                 report.agents_failed.append(agent_id)
                 report.errors[agent_id] = f"{type(exc).__name__} : {exc}"
             else:
                 report.agents_ok.append(agent_id)
+                report.alerts_created += created
 
-        # Étape 11 (envoi de l'outbox) et 12 (heartbeat) : étapes 2 et 5 du plan.
+        if not baseline:
+            self._send_outbox(report, defaults, now=now)
+        # Étape 12 (heartbeat) : étape 5 du plan.
+
+    def _send_outbox(self, report: RunReport, defaults: Defaults, *, now: datetime) -> None:
+        """Étape 11 : toutes les alertes non envoyées partent, y compris celles des runs précédents."""
+        dispatch = send_outbox(self.store, self.mailer, priority=defaults.priority, now=now,
+                               digest_day=now.astimezone(defaults.schedule.tz).date())
+        log.info("outbox : %d mail(s) envoyé(s), %d alerte(s)", dispatch.mails_sent, dispatch.alerts_sent)
+        for error in dispatch.errors:
+            report.add_error(MAIL_ERROR_KEY, error)
 
     def _handle_config_error(self, report: RunReport, error: AgentLoadError, *, now: datetime, notify: bool) -> None:
         """Mail immédiat à la première détection d'une erreur (dédoublonnée sur son empreinte)."""
@@ -145,15 +164,18 @@ class Runner:
         except MailError as exc:
             # notified_at reste NULL : nouvelle tentative au prochain run.
             log.error("mail d'erreur de config %s non envoyé : %s", error.agent_id, exc)
-            report.errors[MAIL_ERROR_KEY] = str(exc)
+            report.add_error(MAIL_ERROR_KEY, str(exc))
         else:
             self.store.mark_config_error_notified(error.agent_id, error.fingerprint, now)
 
-    def _process_agent(self, cfg: AgentConfig, defaults: Defaults, *, now: datetime, baseline: bool) -> None:
+    def _process_agent(self, cfg: AgentConfig, defaults: Defaults, *, now: datetime, baseline: bool) -> int:
+        """Traite un agent dans sa transaction. Retourne le nombre d'alertes écrites dans l'outbox."""
         agent_id = cfg.agent_id
         if cfg.position.status == "CLOSED":
+            if cancelled := self.store.cancel_armed_watches(agent_id, now):
+                log.info("%s : %d surveillance(s) armée(s) annulée(s) (position CLOSED)", agent_id, cancelled)
             log.info("%s : statut CLOSED, agent ignoré", agent_id)
-            return
+            return 0
         today = now.astimezone(defaults.schedule.tz).date()
         fired = self.store.fired_rule_ids(agent_id)
         active = cfg.active_rules(fired)
@@ -163,8 +185,12 @@ class Runner:
                  today.isoformat())
         if baseline:
             log.info("%s : baseline demandée, aucun fetcher disponible avant l'étape 3", agent_id)
-        # Étapes 3 à 10 du pipeline (cours, sources, tri, analyse, résolution, règles déterministes,
-        # dédoublonnage, outbox) : étapes 2 à 4 du plan.
+            return 0
+        # Étapes 3 à 6 du pipeline (cours, sources, tri, analyse) : étapes 3 et 4 du plan. D'ici là, ni cours
+        # ni match : seules les règles time peuvent se déclencher.
+        evaluation = evaluate_agent(self.store, cfg, defaults, matches=[], items={}, price=None, now=now,
+                                    fired=fired)
+        return len(evaluation.emitted)
 
 
 # --------------------------------------------------------------------------- CLI

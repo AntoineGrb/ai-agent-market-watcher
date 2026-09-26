@@ -6,11 +6,13 @@ from pathlib import Path
 import pytest
 
 from watcher import run as run_module
+from watcher.config import load_agent, load_defaults
+from watcher.engine.pipeline import evaluate_agent
 from watcher.models import NewsItem
 from watcher.run import EXIT_FAILED, EXIT_OK, EXIT_USAGE, Runner, main
 from watcher.settings import Settings
 from watcher.store import Store
-from tests.conftest import NOW, FakeHealthchecks, FakeMailer
+from tests.conftest import NOW, FakeHealthchecks, FakeMailer, news, rule_match, snapshot
 
 
 def _runner(settings: Settings, store: Store, mailer: FakeMailer | None = None) -> tuple[Runner, FakeMailer, FakeHealthchecks]:
@@ -90,7 +92,7 @@ def test_agent_exception_rolls_back_and_spares_others(settings: Settings, store:
         self.store.mark_seen([item], now)
         if cfg.agent_id == "NANO":
             raise RuntimeError("API LLM indisponible")
-        original(self, cfg, defaults, now=now, baseline=baseline)
+        return original(self, cfg, defaults, now=now, baseline=baseline)
 
     monkeypatch.setattr(Runner, "_process_agent", flaky)
     runner, _, hc = _runner(settings, store)
@@ -188,3 +190,62 @@ def test_cli_test_mail_forces_test_env(cli_settings: Settings, monkeypatch: pyte
     assert main(["--test-mail"]) == EXIT_OK
     assert sent[0][0] == "test"
     assert "SMTP" in sent[0][1].body
+
+
+# --------------------------------------------------------------------------- moteur et outbox
+
+
+def _ubi_holding_expired(edit_agent) -> None:
+    """Entrée il y a plus d'un an : le time stop U-T2 (365 jours) est échu."""
+    edit_agent("ubi", lambda d: d["position"].update(entry_date="2025-09-01"))
+
+
+def test_time_rule_alert_is_sent_once(settings: Settings, store: Store, edit_agent) -> None:
+    _ubi_holding_expired(edit_agent)
+    runner, mailer, _ = _runner(settings, store)
+    report = runner.run(now=NOW)
+    assert report.status == "ok" and report.alerts_created == 1
+    assert store.get_run(report.run_id)["alerts_created"] == 1
+    [mail] = mailer.sent
+    assert mail.subject.startswith("[HIGH] UBI · Vendre toute la ligne · Durée de détention maximale")
+    assert store.pending_events() == []
+
+    report = runner.run(now=NOW + timedelta(days=1))
+    assert report.alerts_created == 0 and len(mailer.sent) == 1
+
+
+def test_unsent_alert_is_retried_next_run(settings: Settings, store: Store, edit_agent) -> None:
+    _ubi_holding_expired(edit_agent)
+    runner, _, hc = _runner(settings, store, FakeMailer(fail=True))
+    report = runner.run(now=NOW)
+    assert report.status == "partial" and "alerte UBI" in report.errors["_mail"]
+    assert hc.calls[-1][0] == "fail"
+    assert len(store.pending_events()) == 1
+
+    runner, mailer, _ = _runner(settings, store)
+    report = runner.run(now=NOW + timedelta(days=1))
+    assert report.status == "ok" and report.alerts_created == 0
+    assert [m.subject.split(" · ")[0] for m in mailer.sent] == ["[HIGH] UBI"]
+    assert store.pending_events() == []
+
+
+def test_baseline_leaves_outbox_untouched(settings: Settings, store: Store, edit_agent) -> None:
+    _ubi_holding_expired(edit_agent)
+    runner, mailer, _ = _runner(settings, store)
+    report = runner.run(now=NOW, baseline=True)
+    assert report.alerts_created == 0 and mailer.sent == [] and store.pending_events() == []
+
+
+def test_closed_agent_cancels_armed_watches(settings: Settings, store: Store, edit_agent) -> None:
+    cfg = load_agent(settings.agents_dir / "ubi")
+    defaults = load_defaults(settings.agents_dir)
+    evaluate_agent(store, cfg, defaults, matches=[rule_match("U-B1", offer_price=11.0)],
+                   items={"a": news("a")}, price=snapshot(10.0, 9.5), now=NOW, fired=set())
+    assert len(store.active_armed_watches("UBI")) == 1
+
+    edit_agent("ubi", lambda d: d["position"].update(status="CLOSED"))
+    runner, _, _ = _runner(settings, store)
+    runner.run(now=NOW + timedelta(days=1))
+    assert store.active_armed_watches("UBI") == []
+    status = store._conn.execute("SELECT status FROM armed_watches").fetchone()["status"]
+    assert status == "cancelled"

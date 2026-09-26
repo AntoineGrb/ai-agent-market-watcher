@@ -188,6 +188,14 @@ def test_referenced_figure_must_be_declared() -> None:
         AgentConfig.model_validate(data)
 
 
+def test_arm_must_use_price_vs_figure() -> None:
+    data = _nano_data()
+    _rule(data["rules"], "N-B3")["overrides"][0]["arms"]["when"] = {"metric": "price_vs_entry", "op": ">=",
+                                                                    "value": 2.0}
+    with pytest.raises(ValidationError, match="N-B3-EXIT : une surveillance armée doit utiliser"):
+        AgentConfig.model_validate(data)
+
+
 def test_override_defaults() -> None:
     rule = EventRule.model_validate({
         "id": "X-S1", "kind": "event", "phase": "OWNED", "direction": "bearish", "trigger": "t",

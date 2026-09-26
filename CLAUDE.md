@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Étape 0 (spike sources) terminée : voir `docs/sources.md` (endpoints validés, pièges) et les réponses réelles enregistrées dans `tests/data/sources/`.
 
-Étape 1 (socle) en place : `settings.py`, `config.py` (schéma §4.2 + `Defaults`, `extra="forbid"`, chargement isolé par agent), `models.py`, `store.py` (schéma §10, transaction par agent), `monitoring.py`, `notify/` (mailer, gabarits mail de test et erreur de config), `sources/base.py` (Protocol + registre vide), `run.py` (orchestration). Les étapes 3 à 11 du pipeline sont des emplacements commentés dans `Runner._process_agent` / `_run_agents`. Arborescence cible : `docs/cadrage.md` §3.2.
+Étape 1 (socle) en place : `settings.py`, `config.py` (schéma §4.2 + `Defaults`, `extra="forbid"`, chargement isolé par agent), `models.py`, `store.py` (schéma §10, transaction par agent), `monitoring.py`, `notify/` (mailer, gabarits mail de test et erreur de config), `sources/base.py` (Protocol + registre vide), `run.py` (orchestration). Arborescence cible : `docs/cadrage.md` §3.2.
+
+Étape 2 (moteur déterministe) en place : `engine/` (`metrics`, `resolve`, `price_rules`, `time_rules`, `priority`, `dedup`, et `pipeline.evaluate_agent` qui enchaîne résolution → règles déterministes → dédoublonnage → outbox dans la transaction de l'agent), `notify/dispatch.py` (envoi de l'outbox, gabarits alerte / digest minimaux à finaliser à l'étape 5). `run.py` appelle le pipeline avec `matches=[]` et `price=None` : les étapes 3 à 6 (cours, sources, tri, analyse) restent à brancher dans `Runner._process_agent`. La mise à jour de la « dernière clôture traitée » (`is_new_close`, `source_state`) revient au provider de cours (étape 3).
 
 Mise en place locale (Windows) : `python -m venv .venv` puis `.venv/Scripts/python -m pip install -r requirements-dev.txt`. `pytest` exclut le marqueur `eval` par défaut (`pyproject.toml`). Sur ce poste, Avast intercepte le TLS : les appels réseau Python échouent sans bundle CA adapté (voir `docs/sources.md` §8), ne rien contourner dans le code.
 

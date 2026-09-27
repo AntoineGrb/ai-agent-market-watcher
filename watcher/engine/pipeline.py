@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 from watcher.config import Action, AgentConfig, Defaults
 from watcher.engine.dedup import dedup_key, should_emit, uses_window
+from watcher.engine.describe import rule_text
 from watcher.engine.price_rules import evaluate_anomaly, evaluate_armed_watches, evaluate_price_rules
 from watcher.engine.priority import sort_key
 from watcher.engine.resolve import PendingArm, resolve_matches
@@ -34,19 +35,32 @@ class AgentEvaluation:
 
 
 class _AgentPipeline:
-    def __init__(self, store: Store, cfg: AgentConfig, defaults: Defaults, now: datetime) -> None:
+    def __init__(self, store: Store, cfg: AgentConfig, defaults: Defaults, now: datetime,
+                 price: PriceSnapshot | None) -> None:
         self.store = store
         self.cfg = cfg
         self.defaults = defaults
         self.now = now
+        self.price = price
         self.result = AgentEvaluation()
 
     @property
     def agent_id(self) -> str:
         return self.cfg.agent_id
 
+    def with_context(self, alert: Alert) -> Alert:
+        """Fige dans l'alerte ce dont le mail a besoin : texte de la règle, devise, prix d'entrée, cours."""
+        position = self.cfg.position
+        return alert.model_copy(update={
+            "rule_text": alert.rule_text or rule_text(alert, self.cfg, self.defaults),
+            "currency": position.currency,
+            "entry_price": position.entry_price if position.status == "OWNED" else None,
+            "price": alert.price or self.price,
+        })
+
     def emit(self, alert: Alert) -> int | None:
         """Écrit l'alerte dans l'outbox sauf doublon. Retourne l'ID de l'événement créé."""
+        alert = self.with_context(alert)
         key = dedup_key(alert, self.cfg.position.entry_date)
         since = self.now - timedelta(days=self.defaults.dedup.event_window_days) if uses_window(alert) else None
         previous = [row.alert for row in self.store.events_by_key(self.agent_id, key, since)]
@@ -87,7 +101,7 @@ def evaluate_agent(
 
     `fired` : règles déjà déclenchées (historique complet de `events`), pour `unless_fired`.
     """
-    pipe = _AgentPipeline(store, cfg, defaults, now)
+    pipe = _AgentPipeline(store, cfg, defaults, now, price)
     today = now.astimezone(defaults.schedule.tz).date()
     active = cfg.active_rules(fired)
 

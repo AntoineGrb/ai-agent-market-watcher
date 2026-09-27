@@ -25,6 +25,10 @@ def _num(value: float, digits: int = 2) -> str:
     return f"{value:.{digits}f}".replace(".", ",")
 
 
+def _num_short(value: float) -> str:
+    return f"{value:g}".replace(".", ",")
+
+
 def _fresh_close(price: PriceSnapshot | None) -> PriceSnapshot | None:
     return price if price is not None and price.is_new_close else None
 
@@ -69,10 +73,11 @@ def evaluate_price_rules(
             headline=rule.note or f"{rule.id} : condition de cours atteinte",
             rationale=(
                 f"Clôture du {price.last_close_date:%d/%m/%Y} : {_num(price.last_close)} {cfg.position.currency}. "
-                f"{rule.when.metric} = {_num(value, 3)} (seuil {_OP_TEXT[rule.when.op]} {rule.when.value:g})."
+                f"{rule.when.metric} = {_num(value, 3)} (seuil {_OP_TEXT[rule.when.op]} {_num_short(rule.when.value)})."
             ),
             event_date=price.last_close_date,
             metrics=ctx.computed,
+            checks=ctx.checks,
             price=price,
         ))
     return alerts
@@ -117,11 +122,12 @@ def evaluate_armed_watches(
                 f"Surveillance {watch.arm_id} armée le {watch.created_at[:10]} sur un prix de référence de "
                 f"{_num(watch.ref_value)} {currency}. Clôture du {price.last_close_date:%d/%m/%Y} : "
                 f"{_num(price.last_close)} {currency}, soit {_num(ratio, 3)} × la référence "
-                f"(seuil {_OP_TEXT[cond.op]} {cond.value:g})."
+                f"(seuil {_OP_TEXT[cond.op]} {_num_short(cond.value)})."
             ),
             event_date=price.last_close_date,
             figures={ARM_REF_FIGURE: watch.ref_value},
             metrics=ctx.computed,
+            checks=ctx.checks,
             price=price,
         )))
     return fired

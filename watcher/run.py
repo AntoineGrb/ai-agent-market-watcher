@@ -1,4 +1,5 @@
-"""Point d'entrée : `python -m watcher.run --all | --agent ID [--baseline | --inject FILE [--primary]] | --test-mail`.
+"""Point d'entrée : `python -m watcher.run --all | --agent ID [--baseline | --inject FILE [--primary]] | --test-mail
+| --heartbeat`.
 
 Orchestration d'un run (cadrage §3.1). Invariants :
 - isolation par agent : une config invalide ou une exception n'arrête jamais les autres agents ;
@@ -9,6 +10,8 @@ Chargement des configs, erreurs de config, store, monitoring, cours et fetch des
 analyse LLM (`llm`), moteur déterministe (résolution, règles price / time / surveillances / anomalie,
 dédoublonnage, outbox) et envoi de l'outbox. Les documents d'un agent ne sont marqués vus que s'il a réussi.
 Le budget de tokens est commun à tout le run ; son dépassement fait échouer le run (cadrage §7.5).
+Heartbeat hebdomadaire (cadrage §9.3) : le jour `schedule.heartbeat_weekday`, après le run quotidien (`--all`),
+une seule fois par jour ; `--heartbeat` l'envoie immédiatement, sans exécuter les agents.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ import httpx
 from watcher.config import (
     AgentConfig,
     AgentLoadError,
+    AgentsLoadResult,
     ConfigError,
     Defaults,
     discover_agents,
@@ -39,6 +43,7 @@ from watcher.llm import LlmBudgetExceeded, LlmConfigError, LlmLayer, LlmOutcome,
 from watcher.monitoring import Healthchecks, setup_logging
 from watcher.notify import templates
 from watcher.notify.dispatch import send_outbox
+from watcher.notify.heartbeat import build_heartbeat
 from watcher.notify.mailer import Mailer, MailError
 from watcher.prices import EuronextProvider, PriceService, YFinanceProvider
 from watcher.settings import PROJECT_ROOT, Settings, SettingsError
@@ -58,6 +63,24 @@ GLOBAL_ERROR_KEY = "_global"
 MAIL_ERROR_KEY = "_mail"
 BUDGET_ERROR_KEY = "_budget"   # budget de tokens du run épuisé : le run passe en échec
 WARNINGS_KEY = "_warnings"     # dans runs.errors_json : sources / cours en erreur, sans effet sur le statut du run
+
+
+@dataclass(frozen=True)
+class LoadedRun:
+    """Paramètres globaux et agents chargés pendant le run (réutilisés par le heartbeat)."""
+
+    defaults: Defaults
+    agents: AgentsLoadResult
+
+
+def run_scope(*, only: str | None, baseline: bool, injected: bool) -> str:
+    """Portée enregistrée dans `runs.scope` : seul le run quotidien (`all`) compte dans « X/7 runs OK »."""
+    if only is None:
+        return "baseline" if baseline else "all"
+    agent_id = only.upper()
+    if injected:
+        return f"inject {agent_id}"
+    return f"baseline {agent_id}" if baseline else f"agent {agent_id}"
 
 
 @dataclass
@@ -139,15 +162,30 @@ class Runner:
         monitored = only is None
         if monitored:
             self.hc.start()
-        report = RunReport(run_id=self.store.start_run(self.settings.env, now))
-        log.info("run %d démarré (env=%s, agents=%s, baseline=%s)",
-                 report.run_id, self.settings.env, only or "tous", baseline)
+        scope = run_scope(only=only, baseline=baseline, injected=injected is not None)
+        report = RunReport(run_id=self.store.start_run(self.settings.env, now, scope))
+        log.info("run %d démarré (env=%s, portée=%s)", report.run_id, self.settings.env, scope)
+        loaded: LoadedRun | None = None
         try:
-            self._run_agents(report, now=now, only=only, baseline=baseline, injected=injected)
+            loaded = self._run_agents(report, now=now, only=only, baseline=baseline, injected=injected)
         except Exception as exc:   # erreur hors agent (defaults, dossier agents...) : le run entier échoue
             log.exception("run %d en échec global", report.run_id)
             report.errors[GLOBAL_ERROR_KEY] = str(exc)
+        self._record(report)
 
+        # Étape 12 : heartbeat, après l'enregistrement du run pour qu'il y figure. Un échec d'envoi dégrade le run.
+        if loaded is not None and monitored and not baseline and self._heartbeat_due(loaded.defaults, now):
+            if not self.send_heartbeat(loaded, now=now, report=report):
+                self._record(report)
+        log.info(report.summary())
+        if monitored:
+            if report.status == "ok":
+                self.hc.success(report.summary())
+            else:
+                self.hc.fail(report.summary())
+        return report
+
+    def _record(self, report: RunReport) -> None:
         report.finalize()
         self.store.finish_run(report.run_id, self.clock(), RunTotals(
             status=report.status,
@@ -157,18 +195,12 @@ class Runner:
             input_tokens=report.usage.input_tokens,
             output_tokens=report.usage.output_tokens,
             errors=report.persisted_errors(),
+            usage_by_model=report.usage.by_model or None,
         ))
-        log.info(report.summary())
-        if monitored:
-            if report.status == "ok":
-                self.hc.success(report.summary())
-            else:
-                self.hc.fail(report.summary())
-        return report
 
     def _run_agents(
         self, report: RunReport, *, now: datetime, only: str | None, baseline: bool, injected: list[NewsItem] | None
-    ) -> None:
+    ) -> LoadedRun:
         defaults = load_defaults(self.settings.agents_dir)
         loaded = load_agents(self.settings.agents_dir, only=only, validate_source=validate_source_params)
         budget = TokenBudget(defaults.llm_budget.max_total_tokens_per_run, used=report.usage)
@@ -198,15 +230,46 @@ class Runner:
 
         if not baseline:
             self._send_outbox(report, defaults, now=now)
-        # Étape 12 (heartbeat) : étape 5 du plan.
+        return LoadedRun(defaults, loaded)
 
     def _send_outbox(self, report: RunReport, defaults: Defaults, *, now: datetime) -> None:
         """Étape 11 : toutes les alertes non envoyées partent, y compris celles des runs précédents."""
         dispatch = send_outbox(self.store, self.mailer, priority=defaults.priority, now=now,
-                               digest_day=now.astimezone(defaults.schedule.tz).date())
+                               digest_day=now.astimezone(defaults.schedule.tz).date(),
+                               send_empty_digest=defaults.digest.send_if_empty)
         log.info("outbox : %d mail(s) envoyé(s), %d alerte(s)", dispatch.mails_sent, dispatch.alerts_sent)
         for error in dispatch.errors:
             report.add_error(MAIL_ERROR_KEY, error)
+
+    # ------------------------------------------------------------------ heartbeat
+
+    def _heartbeat_due(self, defaults: Defaults, now: datetime) -> bool:
+        today = now.astimezone(defaults.schedule.tz).date()
+        return today.weekday() == defaults.schedule.heartbeat_weekday and not self.store.heartbeat_sent_on(today)
+
+    def send_heartbeat(self, loaded: LoadedRun, *, now: datetime, report: RunReport | None = None) -> bool:
+        """Envoie le heartbeat et l'enregistre. Retourne False si le mail n'est pas parti (retenté au run suivant
+        du même jour, sinon la semaine suivante : Healthchecks reste le filet de sécurité)."""
+        defaults = loaded.defaults
+        data = build_heartbeat(self.store, defaults, configs=loaded.agents.configs,
+                               invalid={a: e.message for a, e in loaded.agents.errors.items()}, now=now)
+        mail = templates.heartbeat_mail(data, tz=defaults.schedule.tz)
+        try:
+            self.mailer.send(mail)
+        except MailError as exc:
+            log.error("heartbeat non envoyé : %s", exc)
+            if report is not None:
+                report.add_error(MAIL_ERROR_KEY, f"heartbeat : {exc}")
+            return False
+        self.store.record_heartbeat(data.today, now)
+        log.info("heartbeat envoyé : %s", mail.subject)
+        return True
+
+    def heartbeat_now(self, *, now: datetime) -> bool:
+        """`--heartbeat` : envoi immédiat, sans exécuter les agents ni toucher à leur état."""
+        defaults = load_defaults(self.settings.agents_dir)
+        agents = load_agents(self.settings.agents_dir, validate_source=validate_source_params)
+        return self.send_heartbeat(LoadedRun(defaults, agents), now=now)
 
     def _handle_config_error(self, report: RunReport, error: AgentLoadError, *, now: datetime, notify: bool) -> None:
         """Mail immédiat à la première détection d'une erreur (dédoublonnée sur son empreinte)."""
@@ -278,6 +341,8 @@ def build_parser() -> argparse.ArgumentParser:
     target.add_argument("--agent", metavar="ID", help="exécute un seul agent (ex. NANO)")
     target.add_argument("--test-mail", action="store_true",
                         help="envoie un mail pour valider la config SMTP (force WATCHER_ENV=test)")
+    target.add_argument("--heartbeat", action="store_true",
+                        help="envoie immédiatement le heartbeat hebdomadaire, sans exécuter les agents")
     parser.add_argument("--baseline", action="store_true",
                         help="premier démarrage : marque tous les documents comme vus, sans LLM ni mail")
     parser.add_argument("--inject", metavar="FILE", type=Path,
@@ -304,8 +369,8 @@ def _load_dotenv() -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.test_mail and args.baseline:
-        parser.error("--baseline est incompatible avec --test-mail")
+    if (args.test_mail or args.heartbeat) and args.baseline:
+        parser.error("--baseline est incompatible avec --test-mail et --heartbeat")
     if args.inject is not None and (args.agent is None or args.baseline):
         parser.error("--inject exige --agent et est incompatible avec --baseline")
     if args.primary and args.inject is None:
@@ -361,6 +426,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         register_builtin_fetchers(settings, client)
         runner = Runner(settings, store, mailer, healthchecks, prices=build_price_service(client),
                         llm=LlmLayer(settings))
+        if args.heartbeat:
+            try:
+                return EXIT_OK if runner.heartbeat_now(now=now) else EXIT_FAILED
+            except ConfigError as exc:
+                log.error("heartbeat impossible : %s", exc)
+                return EXIT_FAILED
         report = runner.run(now=now, only=args.agent, baseline=args.baseline, injected=injected)
     return EXIT_OK if report.status == "ok" else EXIT_FAILED
 

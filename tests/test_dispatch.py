@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import pytest
 
 from watcher.config import Action, Defaults, Severity
-from watcher.models import Alert, Evidence
+from watcher.models import Alert, ConditionCheck, Evidence
 from watcher.notify import templates
 from watcher.notify.dispatch import send_outbox
 from watcher.notify.mailer import Mail, MailError
@@ -96,15 +96,54 @@ def test_failed_mail_stays_in_outbox_for_next_run(store: Store, defaults: Defaul
 def test_alert_block_details() -> None:
     alert = _alert("UBI", "U-B1", A.RECO_HOLD, S.CRITICAL).model_copy(update={
         "source_rule_id": "U-B1", "rule_id": "U-B2", "figures": {"offer_price": 11.0},
-        "metrics": {"figure_vs_prev_close(offer_price)": 1.157895}, "price": snapshot(10.0, 9.5),
+        "metrics": {"figure_vs_prev_close(offer_price)": 1.157895, "price_vs_entry": 1.876173},
+        "checks": [ConditionCheck(metric="figure_vs_prev_close(offer_price)", value=1.157895, op="<", threshold=1.0,
+                                  met=False)],
+        "price": snapshot(10.0, 9.5), "currency": "EUR", "entry_price": 5.33,
+        "rule_text": "Offre publique (OPA, OPR, OPAS)\n déposée",
         "downgrade_reason": "surveillance U-B1-EXIT non armée : confiance 0,60 < 0,80",
     })
     body = templates.alert_mail("UBI", [alert]).body
-    assert "Règle : U-B2 (règle U-B1)" in body
+    assert body.startswith("UBI : 1 alerte, de la plus prioritaire")
+    assert "Règle : U-B2 (règle U-B1) · Offre publique (OPA, OPR, OPAS) déposée" in body
+    assert "Origine : actualité · date : 24/09/2026" in body
+    assert "Analyse : Passage clé." in body
     assert "Chiffres extraits : offer_price = 11" in body
-    assert "Métriques calculées : figure_vs_prev_close(offer_price) = 1,158" in body
-    assert "Cours : clôture du 24/09/2026 à 10,00, variation J-1 : 5,3 %" in body
+    assert ("- offer_price / clôture précédant l'événement : 1,158 (soit +15,8 %) ; seuil : < 1 "
+            "→ condition non remplie") in body
+    # Métrique calculée sans seuil associé : affichée à part.
+    assert "Métriques calculées : cours / prix d'entrée = 1,876 (soit +87,6 %)" in body
+    assert ("Cours : clôture du 24/09/2026 à 10,00 EUR ; variation J-1 : +5,3 % ; "
+            "écart au prix d'entrée : +87,6 % (entrée à 5,33 EUR)") in body
     assert "Attention : surveillance U-B1-EXIT non armée" in body
+
+
+def test_alert_block_rumor_and_deterministic_rule() -> None:
+    rumor = _alert("UBI", "U-S1", A.RECO_UNCLEAR, S.HIGH, rumor=True).model_copy(update={
+        "figures": {"new_shares": 40_000_000.0},
+        "checks": [ConditionCheck(metric="dilution_pct", value=22.7, op=">", threshold=20, met=True)],
+    })
+    price_rule = Alert(agent_id="UBI", rule_id="U-B4", source_rule_id="U-B4", origin="price",
+                       action=A.RECO_SELL_HALF, severity=S.HIGH, headline="Cours ≥ 2 × prix d'entrée",
+                       rationale="Clôture du 24/09/2026 : 10,66 EUR.", event_date=date(2026, 9, 24),
+                       figures={"ref_value": 11.0})
+    body = templates.alert_mail("UBI", [rumor, price_rule]).body
+    assert "[HIGH] [RUMEUR — aucune source primaire]" in body
+    assert "Chiffres extraits : new_shares = 40 000 000" in body
+    assert "- dilution (%) : 22,7 % ; seuil : > 20 % → condition remplie" in body
+    assert "Explication : Clôture du 24/09/2026" in body
+    assert "Valeurs de référence : ref_value = 11" in body
+    assert "Origine : règle de cours" in body
+
+
+def test_empty_digest_only_when_requested(store: Store, defaults: Defaults) -> None:
+    mailer = FakeMailer()
+    report = send_outbox(store, mailer, priority=defaults.priority, now=NOW, digest_day=TODAY,
+                         send_empty_digest=True)
+    [mail] = mailer.sent
+    assert report.mails_sent == 1 and report.alerts_sent == 0
+    assert mail.subject == "[INFO] Veille du 25/09 — 0 élément"
+    assert "Rien à signaler" in mail.body
 
 
 def test_templates_refuse_empty_input() -> None:

@@ -17,7 +17,7 @@ from pydantic_ai.models import Model
 
 from watcher.config import AgentConfig, EventRule
 from watcher.llm.instructions import analysis_instructions, analysis_prompt
-from watcher.llm.runtime import TokenBudget, assign_refs, batched, unknown_refs
+from watcher.llm.runtime import TokenBudget, assign_refs, batched, model_key, unknown_refs
 from watcher.models import Analysis, NewsItem, PriceSnapshot, RuleMatch
 
 log = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ def run_analysis(
     for n, batch in enumerate(batches, start=1):
         refs = assign_refs(batch)
         label = f"{cfg.agent_id} : analyse, lot {n}/{len(batches)}"
-        with budget.call(label) as (usage, limits):
+        with budget.call(label, model_key(model)) as (usage, limits):
             result = analyst.run_sync(
                 analysis_prompt(cfg, refs, price, today=today, max_doc_chars=max_doc_chars),
                 model=model, instructions=instructions, deps=AnalysisDeps(cfg, rules, refs),

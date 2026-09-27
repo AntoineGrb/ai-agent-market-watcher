@@ -74,6 +74,16 @@ class Evidence(BaseModel):
 AlertOrigin = Literal["event", "price", "arm", "time", "anomaly"]
 
 
+class ConditionCheck(BaseModel):
+    """Condition évaluée par le code (override, règle price, surveillance) : affichée avec son seuil dans le mail."""
+
+    metric: str                     # libellé de la métrique : `dilution_pct`, `figure_vs_prev_close(offer_price)`...
+    value: float
+    op: Literal[">=", ">", "<=", "<"]
+    threshold: float
+    met: bool
+
+
 class Alert(BaseModel):
     agent_id: str
     rule_id: str                    # ID affiché (ID de l'override s'il y en a un)
@@ -91,3 +101,9 @@ class Alert(BaseModel):
     metrics: dict[str, float] = Field(default_factory=dict)    # métriques calculées (dilution, prime...)
     price: PriceSnapshot | None = None
     downgrade_reason: str | None = None       # toujours affiché dans le mail quand il est renseigné
+    # Contexte figé à la création de l'alerte, pour que le mail (éventuellement renvoyé depuis l'outbox) ne dépende
+    # pas de la config du jour. Écart assumé avec le cadrage §5.3 : champs optionnels, ajoutés à l'étape 5.
+    rule_text: str | None = None              # déclencheur (event) ou condition (price, time, arm, anomaly)
+    checks: list[ConditionCheck] = Field(default_factory=list)
+    currency: str | None = None
+    entry_price: float | None = None          # position OWNED : écart au prix d'entrée dans le mail

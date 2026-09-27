@@ -320,6 +320,17 @@ class DigestDefaults(_Strict):
 class HeartbeatDefaults(_Strict):
     context_max_age_days: int = Field(gt=0)
     time_stop_warning_days: int = Field(ge=0)
+    shares_outstanding_max_age_days: int = Field(gt=0)   # au-delà : shares_outstanding signalé comme ancien
+
+
+class LlmPrice(_Strict):
+    """Tarif d'un modèle en USD par million de tokens (estimation de coût du heartbeat)."""
+
+    input_usd_per_mtok: float = Field(ge=0)
+    output_usd_per_mtok: float = Field(ge=0)
+
+    def cost_usd(self, input_tokens: int, output_tokens: int) -> float:
+        return (input_tokens * self.input_usd_per_mtok + output_tokens * self.output_usd_per_mtok) / 1_000_000
 
 
 class LlmBudgetDefaults(_Strict):
@@ -339,6 +350,7 @@ class Defaults(_Strict):
     digest: DigestDefaults
     heartbeat: HeartbeatDefaults
     llm_budget: LlmBudgetDefaults
+    llm_pricing: dict[str, LlmPrice] = Field(default_factory=dict)   # clé : `provider:modèle`
 
     @field_validator("priority")
     @classmethod

@@ -220,6 +220,7 @@ def resolve_match(
         event_date=match.event_date,
         figures=dict(match.extracted_figures),
         metrics=ctx.computed,
+        checks=ctx.checks,
         price=price,
         downgrade_reason=_join(reasons),
     )

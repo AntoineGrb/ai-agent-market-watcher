@@ -44,6 +44,14 @@ digest:
 heartbeat:
   context_max_age_days: 90
   time_stop_warning_days: 30
+  shares_outstanding_max_age_days: 60   # publications mensuelles des droits de vote : 2 mois sans mise à jour
 
 llm_budget:
   max_total_tokens_per_run: 300000
+
+# Estimation du coût dans le heartbeat, en USD par million de tokens (tarifs API Anthropic relevés le 26/09/2026).
+# Un modèle absent de cette liste est compté en tokens, sans coût.
+llm_pricing:
+  "anthropic:claude-haiku-4-5": {input_usd_per_mtok: 1.0, output_usd_per_mtok: 5.0}
+  "anthropic:claude-sonnet-5": {input_usd_per_mtok: 2.0, output_usd_per_mtok: 10.0}
+

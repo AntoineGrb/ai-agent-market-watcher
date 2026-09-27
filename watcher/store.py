@@ -15,7 +15,7 @@ import sqlite3
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -103,8 +103,21 @@ CREATE TABLE IF NOT EXISTS config_errors (
 );
 """
 
+# Étape 5 : heartbeat hebdomadaire. `scope` distingue le run quotidien (`all`) des runs manuels (un agent,
+# injection, baseline) ; `usage_json` détaille les tokens par modèle (coût estimé) ; `heartbeats` évite d'envoyer
+# deux heartbeats le même jour.
+_SCHEMA_V2 = """
+ALTER TABLE runs ADD COLUMN scope TEXT NOT NULL DEFAULT 'all';
+ALTER TABLE runs ADD COLUMN usage_json TEXT;
+
+CREATE TABLE IF NOT EXISTS heartbeats (
+    day             TEXT PRIMARY KEY,     -- date locale d'envoi
+    sent_at         TEXT NOT NULL
+);
+"""
+
 # version → script. Ajouter une migration = ajouter une entrée (jamais modifier une entrée existante).
-MIGRATIONS: dict[int, str] = {1: _SCHEMA_V1}
+MIGRATIONS: dict[int, str] = {1: _SCHEMA_V1, 2: _SCHEMA_V2}
 SCHEMA_VERSION = max(MIGRATIONS)
 
 
@@ -161,7 +174,26 @@ class RunTotals:
     alerts_created: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
-    errors: dict[str, str] | None = None
+    errors: dict[str, Any] | None = None
+    usage_by_model: dict[str, list[int]] | None = None   # `provider:modèle` → [entrée, sortie]
+
+
+@dataclass(frozen=True)
+class RunRow:
+    id: int
+    scope: str                  # all | baseline | agent <ID> | inject <ID>
+    started_at: datetime
+    finished_at: datetime | None
+    status: str
+    alerts_created: int
+    input_tokens: int
+    output_tokens: int
+    errors: dict[str, Any]
+    usage_by_model: dict[str, list[int]]
+
+    @property
+    def duration_s(self) -> float | None:
+        return None if self.finished_at is None else (self.finished_at - self.started_at).total_seconds()
 
 
 class Store:
@@ -233,28 +265,61 @@ class Store:
 
     # ------------------------------------------------------------------ runs
 
-    def start_run(self, env: str, started_at: datetime) -> int:
+    def start_run(self, env: str, started_at: datetime, scope: str = "all") -> int:
         cur = self._conn.execute(
-            "INSERT INTO runs (env, started_at, status) VALUES (?, ?, 'running')",
-            (env, ts(started_at)),
+            "INSERT INTO runs (env, started_at, status, scope) VALUES (?, ?, 'running', ?)",
+            (env, ts(started_at), scope),
         )
         return int(cur.lastrowid)
 
     def finish_run(self, run_id: int, finished_at: datetime, totals: RunTotals) -> None:
         self._conn.execute(
             """UPDATE runs SET finished_at = ?, status = ?, agents_ok = ?, agents_failed = ?,
-                   alerts_created = ?, input_tokens = ?, output_tokens = ?, errors_json = ?
+                   alerts_created = ?, input_tokens = ?, output_tokens = ?, errors_json = ?, usage_json = ?
                WHERE id = ?""",
             (
                 ts(finished_at), totals.status, totals.agents_ok, totals.agents_failed, totals.alerts_created,
                 totals.input_tokens, totals.output_tokens,
                 json.dumps(totals.errors, ensure_ascii=False) if totals.errors else None,
+                json.dumps(totals.usage_by_model, sort_keys=True) if totals.usage_by_model else None,
                 run_id,
             ),
         )
 
     def get_run(self, run_id: int) -> sqlite3.Row | None:
         return self._conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+
+    def runs_since(self, since: datetime) -> list[RunRow]:
+        """Runs démarrés depuis `since`, du plus ancien au plus récent (heartbeat)."""
+        rows = self._conn.execute(
+            """SELECT id, scope, started_at, finished_at, status, alerts_created, input_tokens, output_tokens,
+                      errors_json, usage_json
+               FROM runs WHERE started_at >= ? ORDER BY started_at, id""",
+            (ts(since),),
+        ).fetchall()
+        return [
+            RunRow(
+                id=r["id"], scope=r["scope"], started_at=datetime.fromisoformat(r["started_at"]),
+                finished_at=datetime.fromisoformat(r["finished_at"]) if r["finished_at"] else None,
+                status=r["status"], alerts_created=r["alerts_created"], input_tokens=r["input_tokens"],
+                output_tokens=r["output_tokens"], errors=json.loads(r["errors_json"]) if r["errors_json"] else {},
+                usage_by_model=json.loads(r["usage_json"]) if r["usage_json"] else {},
+            )
+            for r in rows
+        ]
+
+    # ------------------------------------------------------------------ heartbeat
+
+    def heartbeat_sent_on(self, day: date) -> bool:
+        row = self._conn.execute("SELECT 1 FROM heartbeats WHERE day = ?", (day.isoformat(),)).fetchone()
+        return row is not None
+
+    def record_heartbeat(self, day: date, now: datetime) -> None:
+        self._conn.execute(
+            """INSERT INTO heartbeats (day, sent_at) VALUES (?, ?)
+               ON CONFLICT (day) DO UPDATE SET sent_at = excluded.sent_at""",
+            (day.isoformat(), ts(now)),
+        )
 
     # ------------------------------------------------------------------ erreurs de configuration
 
@@ -415,6 +480,15 @@ class Store:
         ).fetchone()
         return row is not None
 
+    def sent_events_since(self, since: datetime) -> list[EventRow]:
+        """Alertes envoyées depuis `since` (heartbeat)."""
+        rows = self._conn.execute(
+            """SELECT id, agent_id, dedup_key, created_at, sent_at, payload_json FROM events
+               WHERE sent_at IS NOT NULL AND sent_at >= ? ORDER BY sent_at, id""",
+            (ts(since),),
+        ).fetchall()
+        return self._event_rows(rows)
+
     def mark_sent(self, event_ids: Iterable[int], now: datetime) -> None:
         self._conn.executemany(
             "UPDATE events SET sent_at = ? WHERE id = ? AND sent_at IS NULL",
@@ -434,12 +508,14 @@ class Store:
         )
         return int(cur.lastrowid)
 
-    def active_armed_watches(self, agent_id: str) -> list[ArmedWatch]:
+    def active_armed_watches(self, agent_id: str | None = None) -> list[ArmedWatch]:
+        """Surveillances actives de l'agent (de tous les agents si `agent_id` est None)."""
+        where = "status = 'active'" + (" AND agent_id = ?" if agent_id is not None else "")
         rows = self._conn.execute(
-            """SELECT id, agent_id, arm_id, source_event_id, metric, ref_value, op, threshold, action, severity,
-                      created_at
-               FROM armed_watches WHERE agent_id = ? AND status = 'active' ORDER BY created_at, id""",
-            (agent_id,),
+            f"""SELECT id, agent_id, arm_id, source_event_id, metric, ref_value, op, threshold, action, severity,
+                       created_at
+                FROM armed_watches WHERE {where} ORDER BY agent_id, created_at, id""",
+            () if agent_id is None else (agent_id,),
         ).fetchall()
         return [
             ArmedWatch(**{**dict(r), "action": Action(r["action"]), "severity": Severity(r["severity"])})

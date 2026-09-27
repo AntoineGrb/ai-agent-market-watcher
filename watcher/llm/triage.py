@@ -15,7 +15,7 @@ from pydantic_ai.models import Model
 
 from watcher.config import AgentConfig, EventRule
 from watcher.llm.instructions import triage_instructions, triage_prompt
-from watcher.llm.runtime import TokenBudget, assign_refs, batched, unknown_refs
+from watcher.llm.runtime import TokenBudget, assign_refs, batched, model_key, unknown_refs
 from watcher.models import NewsItem, TriageResult
 
 log = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ def run_triage(
     for n, batch in enumerate(batches, start=1):
         refs = assign_refs(batch)
         label = f"{cfg.agent_id} : tri, lot {n}/{len(batches)}"
-        with budget.call(label) as (usage, limits):
+        with budget.call(label, model_key(model)) as (usage, limits):
             result = triage_agent.run_sync(
                 triage_prompt(refs), model=model, instructions=instructions, deps=TriageDeps(refs),
                 usage=usage, usage_limits=limits,

@@ -39,11 +39,15 @@ def send_outbox(
     priority: Sequence[Action],
     now: datetime,
     digest_day: date,
+    send_empty_digest: bool = False,
 ) -> DispatchReport:
-    """Envoie les alertes en attente. `digest_day` : date (locale) affichée dans l'objet du digest."""
+    """Envoie les alertes en attente. `digest_day` : date (locale) affichée dans l'objet du digest.
+
+    `send_empty_digest` (`digest.send_if_empty`) : digest « rien à signaler » envoyé même sans alerte INFO.
+    """
     report = DispatchReport()
     pending = store.pending_events()
-    if not pending:
+    if not pending and not send_empty_digest:
         log.info("outbox vide, aucun mail d'alerte")
         return report
 
@@ -57,11 +61,12 @@ def send_outbox(
     for agent_id in sorted(by_agent):
         rows = _sorted(by_agent[agent_id], priority)
         batches.append((f"alerte {agent_id}", rows, templates.alert_mail(agent_id, [r.alert for r in rows])))
-    if digest:
+    if digest or send_empty_digest:
         grouped = {agent_id: _sorted(digest[agent_id], priority) for agent_id in sorted(digest)}
         rows = [r for agent_rows in grouped.values() for r in agent_rows]
         mail = templates.digest_mail(digest_day,
-                                     {a: [r.alert for r in agent_rows] for a, agent_rows in grouped.items()})
+                                     {a: [r.alert for r in agent_rows] for a, agent_rows in grouped.items()},
+                                     allow_empty=send_empty_digest)
         batches.append(("digest", rows, mail))
 
     for label, rows, mail in batches:

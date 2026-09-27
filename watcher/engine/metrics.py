@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from watcher.config import Condition, Op, Position
-from watcher.models import PriceSnapshot
+from watcher.models import ConditionCheck, PriceSnapshot
 
 EXISTING_SHARES_FIGURE = "existing_shares"   # chiffre extrait prioritaire sur position.shares_outstanding
 NEW_SHARES_FIGURE = "new_shares"
@@ -68,7 +68,8 @@ def dilution_pct(new_shares: float, existing_shares: float | None) -> float:
 class MetricContext:
     """Données disponibles pour évaluer les conditions d'un match ou d'une règle déterministe.
 
-    `computed` accumule les métriques effectivement calculées, pour les afficher dans le mail.
+    `computed` accumule les métriques effectivement calculées, `checks` les conditions évaluées avec leur seuil,
+    pour les afficher dans le mail.
     """
 
     position: Position
@@ -76,11 +77,16 @@ class MetricContext:
     figures: Mapping[str, float] = field(default_factory=dict)
     event_date: date | None = None
     computed: dict[str, float] = field(default_factory=dict)
+    checks: list[ConditionCheck] = field(default_factory=list)
 
     def check(self, cond: Condition) -> bool:
         value = self.value(cond)
-        self.computed[metric_label(cond)] = round(value, 6)
-        return compare(value, cond.op, cond.value)
+        label = metric_label(cond)
+        met = compare(value, cond.op, cond.value)
+        self.computed[label] = round(value, 6)
+        self.checks.append(ConditionCheck(metric=label, value=round(value, 6), op=cond.op, threshold=cond.value,
+                                          met=met))
+        return met
 
     def value(self, cond: Condition) -> float:
         match cond.metric:

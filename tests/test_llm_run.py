@@ -80,6 +80,9 @@ def test_end_to_end_primary_sell_signal(settings: Settings, store: Store, amf_do
     run_row = store.get_run(report.run_id)
     assert run_row["input_tokens"] > 0 and run_row["output_tokens"] > 0
     assert report.usage.requests == 4                                   # 2 tris + 2 analyses
+    usage = store.runs_since(NOW)[0].usage_by_model
+    assert sum(t[0] for t in usage.values()) == run_row["input_tokens"]  # détail par modèle (coût du heartbeat)
+    assert "Règle : N-S1 · " in mail.body and "[source primaire]" in mail.body
     assert "N-S1" in store.fired_rule_ids("NANO")
 
 
@@ -169,6 +172,7 @@ def test_inject_runs_full_pipeline_in_test_env(inject_env, settings: Settings) -
     assert mail.subject.startswith("[INFO]")
     with Store.open(settings.db_path) as store:
         assert store.get_run(1)["status"] == "ok"
+        assert store.get_run(1)["scope"] == "inject NANO"
 
 
 def test_inject_primary_flag(inject_env) -> None:

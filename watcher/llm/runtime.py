@@ -75,20 +75,37 @@ def resolve_model(name: str, settings: Settings, *, max_tokens: int) -> Model:
 # --------------------------------------------------------------------------- budget de tokens
 
 
+def model_key(model: Model) -> str:
+    """Nom `provider:modèle`, tel qu'écrit dans `_defaults.yaml` (clé des tarifs du heartbeat)."""
+    return f"{model.system}:{model.model_name}"
+
+
 @dataclass
 class LlmUsage:
     input_tokens: int = 0
     output_tokens: int = 0
     requests: int = 0
+    # Tokens par modèle (`provider:modèle` → [entrée, sortie]) : sert à estimer le coût dans le heartbeat.
+    by_model: dict[str, list[int]] = field(default_factory=dict)
 
     @property
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
 
-    def add(self, usage: RunUsage | LlmUsage) -> None:
+    def add(self, usage: RunUsage | LlmUsage, model: str | None = None) -> None:
         self.input_tokens += usage.input_tokens
         self.output_tokens += usage.output_tokens
         self.requests += usage.requests
+        if isinstance(usage, LlmUsage):
+            for name, (tokens_in, tokens_out) in usage.by_model.items():
+                self._add_model(name, tokens_in, tokens_out)
+        elif model is not None:
+            self._add_model(model, usage.input_tokens, usage.output_tokens)
+
+    def _add_model(self, name: str, tokens_in: int, tokens_out: int) -> None:
+        totals = self.by_model.setdefault(name, [0, 0])
+        totals[0] += tokens_in
+        totals[1] += tokens_out
 
 
 @dataclass
@@ -103,8 +120,8 @@ class TokenBudget:
         return max(0, self.max_total_tokens - self.used.total_tokens)
 
     @contextmanager
-    def call(self, label: str) -> Iterator[tuple[RunUsage, UsageLimits]]:
-        """Encadre un appel LLM : plafonds de l'appel, puis comptage des tokens, même en cas d'échec."""
+    def call(self, label: str, model: str) -> Iterator[tuple[RunUsage, UsageLimits]]:
+        """Encadre un appel LLM : plafonds de l'appel, puis comptage des tokens (par modèle), même en cas d'échec."""
         if self.remaining == 0:
             raise LlmBudgetExceeded(f"budget de {self.max_total_tokens} tokens du run épuisé avant : {label}")
         usage = RunUsage()
@@ -119,7 +136,7 @@ class TokenBudget:
         except AgentRunError as exc:   # retries épuisés (validation), erreur de l'API...
             raise LlmError(f"{label} : {type(exc).__name__} : {exc}") from exc
         finally:
-            self.used.add(usage)
+            self.used.add(usage, model)
             log.info("%s : %d requête(s), %d tokens en entrée, %d en sortie (run : %d / %d)", label,
                      usage.requests, usage.input_tokens, usage.output_tokens, self.used.total_tokens,
                      self.max_total_tokens)

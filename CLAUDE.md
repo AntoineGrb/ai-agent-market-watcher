@@ -25,6 +25,8 @@ Mise en place locale (Windows) : `python -m venv .venv` puis `.venv/Scripts/pyth
   - Les éléments marqués 🔲 ne doivent **pas** être inventés : valeur `null` ou source en `enabled: false`.
   - Implémenter étape par étape (§13, étapes 0 à 6) ; ne pas passer à l'étape suivante sans tests verts.
 - **`docs/deploiement.md`** : livrable de l'étape 6, procédure de mise en production sur le VPS et exploitation courante.
+- **`docs/guide-projet.md`** : guide pédagogique du projet (fonctionnement, rôle de chaque dossier et fichier, couche LLM en détail). À tenir à jour si l'architecture change.
+- **`docs/exploitation.md`** : aide-mémoire des commandes du RUN (watcher, logs, SQLite, Docker, cron, VPS, sauvegardes).
 - **`docs/sources.md`** : livrable de l'étape 0, référence pour implémenter les fetchers et le provider de cours (ex. `when:Nd` obligatoire sur Google News, AMF via l'API info-financiere.gouv.fr filtrée par ISIN, barre du jour à écarter dans les cours).
 - **`docs/specs.md`** (v1.2) : ne sert plus que de source du **contenu rédactionnel** des `agents/<id>/prompt.md` (thèse, contexte, nuances). Ses tableaux de règles, sa section 0 et ses références à `watch_rules.yaml` / `watch_models.py` sont obsolètes : les règles vivent dans `agents/<id>/config.yaml`.
 

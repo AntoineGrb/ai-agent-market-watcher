@@ -1,0 +1,17 @@
+# Le Dockerfile ne copie que requirements.txt et watcher/ : le reste n'a rien à faire dans le contexte de build,
+# en particulier les secrets (.env) et les données (data/).
+.env
+.env.*
+.git/
+.venv/
+data/
+agents/
+fixtures/
+docs/
+tests/
+deploy/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/

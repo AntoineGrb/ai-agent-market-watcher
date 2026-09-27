@@ -36,6 +36,7 @@ class Settings(BaseModel):
     smtp_app_password: SecretStr | None = None
     mail_to: str | None = None
     healthchecks_url: str | None = None   # URL de ping du check, sans suffixe
+    healthchecks_test_url: str | None = None   # check dédié à l'environnement de test (§11.4), optionnel
     sec_user_agent: str | None = None
     base_dir: Path = PROJECT_ROOT
 
@@ -54,6 +55,7 @@ class Settings(BaseModel):
             "smtp_app_password": "SMTP_APP_PASSWORD",
             "mail_to": "MAIL_TO",
             "healthchecks_url": "HEALTHCHECKS_URL",
+            "healthchecks_test_url": "HEALTHCHECKS_TEST_URL",
             "sec_user_agent": "SEC_USER_AGENT",
         }
         values: dict[str, object] = {}
@@ -98,6 +100,11 @@ class Settings(BaseModel):
         return "[TEST] " if self.is_test else ""
 
     @property
+    def healthchecks_ping_url(self) -> str | None:
+        """Prod : `HEALTHCHECKS_URL`. Test : uniquement le check dédié `HEALTHCHECKS_TEST_URL` (§11.4),
+        pour ne jamais fausser le suivi du job de prod (semaine de rodage en test sur le VPS, étape 6)."""
+        return self.healthchecks_test_url if self.is_test else self.healthchecks_url
+
+    @property
     def healthchecks_enabled(self) -> bool:
-        """Désactivé en test (§11.4) pour ne jamais fausser le suivi du job de prod."""
-        return not self.is_test and bool(self.healthchecks_url)
+        return bool(self.healthchecks_ping_url)

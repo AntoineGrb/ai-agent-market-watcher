@@ -14,6 +14,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Étape 5 (notifications) en place : `notify/templates.py` (alerte finalisée §9.1 : texte de la règle, seuils évalués, cours et écart au prix d'entrée, preuves ; digest ; heartbeat ; erreur de config), `notify/heartbeat.py` (collecte des données du heartbeat), `engine/describe.py` (textes des règles et métriques). Heartbeat envoyé le jour `schedule.heartbeat_weekday` après un run `--all` (hors baseline), une fois par jour (table `heartbeats`) ; `--heartbeat` l'envoie immédiatement sans exécuter les agents ; un échec SMTP du heartbeat met le run en `partial`. Écarts assumés : `Alert` porte des champs optionnels figés à la création (`rule_text`, `checks`, `currency`, `entry_price`), remplis par `pipeline.emit`, pour qu'un mail renvoyé depuis l'outbox ne dépende pas de la config du jour ; migration SQLite v2 (`runs.scope` : `all` / `baseline` / `agent X` / `inject X`, seul `all` compte dans « X/7 runs OK » ; `runs.usage_json` : tokens par modèle ; table `heartbeats`) ; coût estimé via `llm_pricing` (`_defaults.yaml`, USD / million de tokens) ; `heartbeat.shares_outstanding_max_age_days` (60 j) pour « shares_outstanding ancien ». `digest.send_if_empty` est désormais appliqué.
 
+Étape 6 (déploiement) préparée côté dépôt : `Dockerfile` (UID réglable par l'argument `UID` / `WATCHER_UID`, 1000 par défaut), `.dockerignore`, `compose.yaml`, `deploy/setup-vps.sh` (préparation idempotente d'un VPS Ubuntu : fuseau, mises à jour auto, Docker, ufw, durcissement SSH, logrotate de `data/cron.log`), `deploy/cron-run.sh` (lancé par le cron, `docker compose run --rm -T`). Pas à pas utilisateur (comptes, VPS, semaine en `test`, bascule en prod) : `docs/deploiement.md`. Écart assumé : `HEALTHCHECKS_TEST_URL`, check dédié pingé uniquement en `WATCHER_ENV=test` (§11.4 « ou check dédié »), pour valider les 7 runs de la semaine de rodage sans toucher au check de prod. Reste à faire par l'utilisateur : rodage d'une semaine puis bascule.
+
 Mise en place locale (Windows) : `python -m venv .venv` puis `.venv/Scripts/python -m pip install -r requirements-dev.txt`. `pytest` exclut le marqueur `eval` par défaut (`pyproject.toml`). Sur ce poste, Avast intercepte le TLS : les appels réseau Python échouent sans bundle CA adapté (voir `docs/sources.md` §8), ne rien contourner dans le code.
 
 ## Documents de référence
@@ -22,6 +24,7 @@ Mise en place locale (Windows) : `python -m venv .venv` puis `.venv/Scripts/pyth
   - Les décisions de la §2 sont **actées** : ne pas les rediscuter, signaler seulement une impossibilité technique.
   - Les éléments marqués 🔲 ne doivent **pas** être inventés : valeur `null` ou source en `enabled: false`.
   - Implémenter étape par étape (§13, étapes 0 à 6) ; ne pas passer à l'étape suivante sans tests verts.
+- **`docs/deploiement.md`** : livrable de l'étape 6, procédure de mise en production sur le VPS et exploitation courante.
 - **`docs/sources.md`** : livrable de l'étape 0, référence pour implémenter les fetchers et le provider de cours (ex. `when:Nd` obligatoire sur Google News, AMF via l'API info-financiere.gouv.fr filtrée par ISIN, barre du jour à écarter dans les cours).
 - **`docs/specs.md`** (v1.2) : ne sert plus que de source du **contenu rédactionnel** des `agents/<id>/prompt.md` (thèse, contexte, nuances). Ses tableaux de règles, sa section 0 et ses références à `watch_rules.yaml` / `watch_models.py` sont obsolètes : les règles vivent dans `agents/<id>/config.yaml`.
 
@@ -37,7 +40,8 @@ python -m watcher.run --agent NANO --inject fixtures/nano/<cas>.md --primary   #
 pytest                                       # tests unitaires (sans réseau ni LLM)
 pytest tests/test_x.py::test_y               # un seul test
 pytest -m eval                               # evals avec appels LLM réels (à la demande)
-docker compose run --rm watcher              # exécution conteneurisée (cron hôte)
+docker compose run --rm watcher              # exécution conteneurisée
+deploy/cron-run.sh                           # ce que lance le cron du VPS (docker compose run --rm -T, log data/cron.log)
 ```
 
 Stack : Python 3.12, `pydantic-ai-slim[anthropic]` (versions épinglées dans `requirements.txt` ; vérifier les signatures dans la doc de la version installée), Pydantic v2, `httpx`, `feedparser`, `PyYAML` (`safe_load` uniquement), `yfinance` derrière l'interface `PriceProvider`, stdlib pour `sqlite3` / `smtplib` / `logging`.

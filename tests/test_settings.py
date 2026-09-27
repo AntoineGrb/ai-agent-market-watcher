@@ -47,3 +47,14 @@ def test_environment_behaviours() -> None:
     assert test.subject_prefix == "[TEST] "
     assert prod.db_path != test.db_path
     assert not Settings.from_env({}).healthchecks_enabled
+
+
+def test_healthchecks_dedicated_test_check() -> None:
+    """En test, seul le check dédié est pingé : jamais celui de prod (§11.4)."""
+    environ = {"HEALTHCHECKS_URL": "https://hc-ping.com/prod", "HEALTHCHECKS_TEST_URL": "https://hc-ping.com/test"}
+    prod = Settings.from_env(environ)
+    test = Settings.from_env({**environ, "WATCHER_ENV": "test"})
+    assert prod.healthchecks_ping_url == "https://hc-ping.com/prod"
+    assert test.healthchecks_ping_url == "https://hc-ping.com/test" and test.healthchecks_enabled
+    only_test = Settings.from_env({"HEALTHCHECKS_TEST_URL": "https://hc-ping.com/test"})
+    assert not only_test.healthchecks_enabled

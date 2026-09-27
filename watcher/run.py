@@ -421,7 +421,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         log.info("injection de %s (source %s, primaire : %s)", fixture.name, injected[0].source_name,
                  injected[0].source_primary)
 
-    healthchecks = Healthchecks(settings.healthchecks_url, enabled=settings.healthchecks_enabled)
+    healthchecks = Healthchecks(settings.healthchecks_ping_url, enabled=settings.healthchecks_enabled)
     with build_client() as client, Store.open(settings.db_path) as store:
         register_builtin_fetchers(settings, client)
         runner = Runner(settings, store, mailer, healthchecks, prices=build_price_service(client),

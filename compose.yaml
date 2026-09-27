@@ -1,0 +1,17 @@
+# Cadrage §11.1. Aucun port exposé : le watcher ne fait que du trafic sortant.
+# Run quotidien : `docker compose run --rm -T watcher` (voir deploy/cron-run.sh et docs/deploiement.md).
+services:
+  watcher:
+    build:
+      context: .
+      args:
+        UID: "${WATCHER_UID:-1000}"   # propriétaire de ./data sur l'hôte (`id -u`)
+    image: ai-agent-market-watcher:latest
+    env_file: .env
+    environment:
+      TZ: Europe/Paris
+    volumes:
+      - ./data:/app/data            # SQLite + logs : survivent aux rebuilds
+      - ./agents:/app/agents:ro     # configs éditables sans rebuild
+      - ./fixtures:/app/fixtures:ro
+    command: ["python", "-m", "watcher.run", "--all"]

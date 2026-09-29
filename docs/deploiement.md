@@ -11,7 +11,7 @@
 | `.dockerignore` | Garde `.env`, `data/`, `.venv/`… hors du contexte de build. |
 | `compose.yaml` | Service `watcher` : `.env` en `env_file`, `TZ=Europe/Paris`, volumes `data/` (lecture-écriture), `agents/` et `fixtures/` (lecture seule). Aucun port exposé. |
 | `deploy/setup-vps.sh` | Préparation du VPS en une commande : fuseau, mises à jour auto, Docker + Compose, pare-feu, durcissement SSH, droits de `data/` et `.env`, rotation de `data/cron.log`. Idempotent. |
-| `deploy/cron-run.sh` | Ce que lance le cron : `docker compose run --rm -T watcher`, sortie ajoutée à `data/cron.log`. |
+| `deploy/cron-run.sh` | Ce que lance le cron : `docker compose run --rm -T watcher`, sortie ajoutée à `data/cron.log`. Si le run se termine en erreur, il pingue lui-même `/fail` sur le check de l'environnement, avec la fin de la sortie en corps : une panne Docker, qui survient avant Python, est alors expliquée dans le mail Healthchecks. |
 | `HEALTHCHECKS_TEST_URL` | Nouvelle variable : check Healthchecks **dédié à l'environnement de test** (cadrage §11.4). En `WATCHER_ENV=test`, seul ce check est pingé, jamais celui de prod. |
 
 Ce qui reste pour toi : les comptes, le VPS, les secrets, la semaine de rodage et la bascule. C'est l'objet de la suite.
@@ -296,6 +296,7 @@ La base de test (`data/test/`) reste en place et ne gêne pas. Les commandes `--
 | `env file .../.env not found` | `.env` absent ou mal placé | Il doit être dans `/opt/watcher/.env`. |
 | Mail non envoyé, `535` / `Username and Password not accepted` | Mot de passe Gmail classique au lieu du mot de passe d'application, ou 2FA désactivée | Régénérer le mot de passe d'application (étape 1). |
 | Healthchecks ne reçoit rien alors que le run tourne | URL du mauvais environnement | En `test`, seul `HEALTHCHECKS_TEST_URL` est pingé ; en `prod`, seul `HEALTHCHECKS_URL`. Les runs `--agent` et `--inject` ne pinguent jamais. |
+| Healthchecks en `/fail`, corps commençant par `cron-run.sh : code de sortie N` sans ligne `run N :` | Panne avant Python (Docker, image, `.env`) | Le corps du ping contient l'erreur ; relancer `./deploy/cron-run.sh` après correction. |
 | Healthchecks en retard, rien dans `cron.log` | Cron non déclenché | `crontab -l`, `systemctl status cron`, `journalctl -u cron --since today`. |
 | Avertissement cours dans le heartbeat | yfinance bloqué ou en panne | Repli Euronext automatique pour Euronext Paris ; si les deux échouent, règles de prix et anomalie sautées ce jour-là (cadrage §8.3). |
 | Run en échec avec `_budget` | Plafond `llm_budget.max_total_tokens_per_run` atteint | Regarder quel agent a reçu beaucoup de documents (`watcher.log`) ; ajuster le plafond dans `_defaults.yaml` si c'est légitime. |

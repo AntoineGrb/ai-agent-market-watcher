@@ -199,6 +199,8 @@ class PriceService:
         self.fallback = euronext_fallback
 
     def closes(self, position: Position, *, today: date, sessions: int = SESSIONS) -> PriceFetch:
+        """Un repli réussi donne un seul avertissement, sans date, pour qu'il se regroupe (×N) dans le heartbeat :
+        à 07:00, yfinance n'a souvent pas encore la séance de la veille, le repli est alors le cas courant."""
         warnings: list[str] = []
         closes: Closes = []
         try:
@@ -212,14 +214,16 @@ class PriceService:
             if closes and gap is None:
                 return PriceFetch(closes, self.primary.name, tuple(warnings))
             if gap is not None:
+                log.info("%s %s : %s", self.primary.name, position.price_symbol, gap)
                 warnings.append(f"{self.primary.name} {position.price_symbol} : {gap}")
             try:
                 fallback_closes = self.fallback.history(position, sessions, today=today)
             except PriceError as exc:
                 warnings.append(str(exc))
             else:
-                warnings.append(f"repli {self.fallback.name} utilisé pour {position.ticker}")
-                return PriceFetch(fallback_closes, self.fallback.name, tuple(warnings))
+                reason = "sans la dernière séance" if gap is not None else f"en échec : {warnings[0]}"
+                warning = f"repli {self.fallback.name} utilisé pour {position.ticker} ({self.primary.name} {reason})"
+                return PriceFetch(fallback_closes, self.fallback.name, (warning,))
 
         if not closes:
             raise PriceError(" ; ".join(warnings) or f"aucun cours pour {position.ticker}")

@@ -308,7 +308,7 @@ def heartbeat_mail(hb: HeartbeatData, *, tz: tzinfo) -> Mail:
 
     if hb.errors:
         sections.append("\n".join(["Erreurs des runs :"] + _occurrence_lines(hb.errors)))
-    lines = ["Sources et cours en erreur :"]
+    lines = ["Sources et cours : avertissements :"]
     lines += _occurrence_lines(hb.warnings) if hb.warnings else ["- aucune"]
     sections.append("\n".join(lines))
 

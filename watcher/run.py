@@ -357,6 +357,11 @@ def build_price_service(client: httpx.Client) -> PriceService:
     return PriceService(YFinanceProvider(), euronext_fallback=EuronextProvider(client))
 
 
+def _utcnow() -> datetime:
+    """Seule horloge réelle de la CLI (remplacée dans les tests)."""
+    return datetime.now(UTC)
+
+
 def _load_dotenv() -> None:
     """Charge `.env` en local si python-dotenv est installé (dépendance de dev). En conteneur : env_file."""
     try:
@@ -386,7 +391,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_USAGE
     setup_logging(settings.log_dir)
     mailer = Mailer(settings)
-    now = datetime.now(UTC)
+    now = _utcnow()
 
     if args.test_mail:
         try:

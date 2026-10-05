@@ -123,7 +123,7 @@ def test_heartbeat_mail(store: Store, defaults: Defaults) -> None:
     assert "- UBI : 1 (1 CRITICAL) : U-S2 (24/09)" in body
     assert "- NANO : désactivé (config invalide)" in body
     assert "Erreurs de configuration en cours (agents désactivés) :\n- NANO (depuis le 2026-09-25)" in body
-    assert "Sources et cours en erreur :\n- aucune" in body
+    assert "Sources et cours : avertissements :\n- aucune" in body
     assert "Surveillances armées actives :\n- aucune" in body
     assert "Coût estimé : 0,00 $" in body
     assert "source « Ubisoft Investor Center » désactivée" in body

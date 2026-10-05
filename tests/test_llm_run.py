@@ -152,6 +152,7 @@ def inject_env(settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     monkeypatch.setattr(run_module, "_load_dotenv", lambda: None)
     monkeypatch.setattr(run_module.Settings, "from_env", classmethod(from_env))
     monkeypatch.setattr(run_module, "setup_logging", lambda log_dir: None)
+    monkeypatch.setattr(run_module, "_utcnow", lambda: NOW)   # event_date des matches simulés : 24/09
     monkeypatch.setattr(run_module, "register_builtin_fetchers", lambda settings, client: None)
     monkeypatch.setattr(run_module, "build_price_service", lambda client: None)
     monkeypatch.setattr(run_module.Mailer, "send", lambda self, mail: captured["sent"].append(mail))

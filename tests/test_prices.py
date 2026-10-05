@@ -161,13 +161,15 @@ def test_primary_used_when_complete() -> None:
 def test_fallback_on_missing_session() -> None:
     fetched = PriceService(StubProvider("yfinance", GAPPED), StubProvider("euronext", COMPLETE)).closes(UBI, today=TODAY)
     assert fetched.provider == "euronext" and fetched.closes == COMPLETE
-    assert any("absente" in w for w in fetched.warnings) and any("repli euronext" in w for w in fetched.warnings)
+    # un seul message, sans date : regroupé (×N) dans le heartbeat d'un run à l'autre
+    assert fetched.warnings == ("repli euronext utilisé pour UBI (yfinance sans la dernière séance)",)
 
 
 def test_fallback_on_primary_failure() -> None:
     service = PriceService(StubProvider("yfinance", PriceError("yfinance KO")), StubProvider("euronext", COMPLETE))
     fetched = service.closes(UBI, today=TODAY)
-    assert fetched.provider == "euronext" and "yfinance KO" in fetched.warnings
+    assert fetched.provider == "euronext"
+    assert fetched.warnings == ("repli euronext utilisé pour UBI (yfinance en échec : yfinance KO)",)
 
 
 def test_gapped_primary_kept_when_fallback_fails() -> None:

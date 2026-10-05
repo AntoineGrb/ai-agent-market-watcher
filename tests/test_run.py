@@ -147,6 +147,8 @@ def cli_settings(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> Setting
     monkeypatch.setattr(run_module.Settings, "from_env",
                         classmethod(lambda cls, environ=None, **kw: settings.model_copy(update=kw)))
     monkeypatch.setattr(run_module, "setup_logging", lambda log_dir: None)
+    # Date figée : un lundi réel déclencherait le heartbeat (SMTP réel), et les dates des fixtures vieilliraient.
+    monkeypatch.setattr(run_module, "_utcnow", lambda: NOW)
     # Aucun réseau : ni fetchers réels, ni provider de cours.
     monkeypatch.setattr(run_module, "register_builtin_fetchers", lambda settings, client: None)
     monkeypatch.setattr(run_module, "build_price_service", lambda client: None)

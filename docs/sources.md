@@ -141,6 +141,7 @@ Deux canaux existent. Le cadrage envisageait le premier ; **le second est retenu
 
 - **yfinance est le provider principal pour toutes les lignes.** C'est le seul qui couvre à la fois Euronext et les marchés US : les agents pressentis Take-Two (`TTWO`, Nasdaq, USD) et Plug Power (`PLUG`, Nasdaq, USD) s'ajouteront sans code, avec `price_symbol: TTWO` / `PLUG`.
 - **Le CSV Euronext sert de repli pour les lignes Euronext Paris** : utilisé si yfinance échoue, ou si la série yfinance présente une séance manquante récente (cas du 24/09/2026). Le repli utilisé est signalé dans le heartbeat.
+- **Constat de la semaine de rodage (29/09 → 05/10/2026)** : au run de 07:00, yfinance n'a pas encore la séance de la veille pour `UBI.PA` / `NANO.PA` (du mardi au samedi). Le repli Euronext est donc le cas courant en semaine. Il produit un seul avertissement, sans date (`repli euronext utilisé pour UBI (yfinance sans la dernière séance)`), regroupé `(×N)` dans le heartbeat. Le détail daté reste dans `watcher.log` (niveau INFO).
 - **Lignes US** : pas de repli identifié à ce jour. À investiguer lors de l'ajout du premier agent US ; en attendant, un échec de yfinance saute les règles de prix de la ligne (comportement §8.3 du cadrage).
 
 ### 6.3 Autres pistes écartées

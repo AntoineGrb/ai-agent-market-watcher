@@ -263,6 +263,8 @@ evals, qui, elles, appellent le vrai LLM et ne tournent que sur demande.
 |---|---|
 | `deploy/setup-vps.sh` | Prépare un serveur Ubuntu neuf en une commande : fuseau horaire, mises à jour de sécurité automatiques, Docker, pare-feu, SSH par clé uniquement, rotation du journal du cron. Peut être relancé sans risque. |
 | `deploy/cron-run.sh` | Ce que le cron exécute chaque matin : lance le conteneur et ajoute sa sortie à `data/cron.log`. |
+| `deploy/aliases.sh` | Raccourcis shell du serveur (`wrun`, `wlog`, `wdb`, `whelp`…), chargés par `~/.bashrc`. |
+| `deploy/aide.sh` | Aide-mémoire des commandes dans le terminal (`whelp [rubrique]`) : version courte de `docs/exploitation.md`. |
 
 ### 4.6 Les fichiers à la racine
 

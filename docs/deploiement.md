@@ -12,6 +12,7 @@
 | `compose.yaml` | Service `watcher` : `.env` en `env_file`, `TZ=Europe/Paris`, volumes `data/` (lecture-écriture), `agents/` et `fixtures/` (lecture seule). Aucun port exposé. |
 | `deploy/setup-vps.sh` | Préparation du VPS en une commande : fuseau, mises à jour auto, Docker + Compose, pare-feu, durcissement SSH, droits de `data/` et `.env`, rotation de `data/cron.log`. Idempotent. |
 | `deploy/cron-run.sh` | Ce que lance le cron : `docker compose run --rm -T watcher`, sortie ajoutée à `data/cron.log`. Si le run se termine en erreur, il pingue lui-même `/fail` sur le check de l'environnement, avec la fin de la sortie en corps : une panne Docker, qui survient avant Python, est alors expliquée dans le mail Healthchecks. |
+| `deploy/aliases.sh`, `deploy/aide.sh` | Raccourcis shell du serveur et aide-mémoire des commandes dans le terminal (`whelp`) : voir `exploitation.md` §17. |
 | `HEALTHCHECKS_TEST_URL` | Nouvelle variable : check Healthchecks **dédié à l'environnement de test** (cadrage §11.4). En `WATCHER_ENV=test`, seul ce check est pingé, jamais celui de prod. |
 
 Ce qui reste pour toi : les comptes, le VPS, les secrets, la semaine de rodage et la bascule. C'est l'objet de la suite.
